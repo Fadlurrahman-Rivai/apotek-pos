@@ -15,7 +15,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { medicineId, batchId, baseQty, unitUsed, referenceNumber, notes } = body;
+    const { medicineId, batchId, baseQty, unitUsed, referenceNumber, notes, diagnosis, action } = body;
 
     const db = readServerDB();
 
@@ -36,6 +36,8 @@ export async function POST(request: Request) {
       unitUsed,
       referenceNumber: referenceNumber || `RXP-${Date.now().toString().slice(-6)}`,
       notes: notes || 'Pengeluaran resep dokter',
+      diagnosis: diagnosis || undefined,
+      action: action || undefined,
       createdAt: new Date().toISOString(),
     };
 

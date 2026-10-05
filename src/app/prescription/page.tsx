@@ -32,6 +32,8 @@ interface CompletedPrescription {
   patientName: string;
   patientAge: string;
   doctorName: string;
+  diagnosis?: string;
+  action?: string;
   date: string;
   items: PrescriptionItem[];
 }
@@ -46,6 +48,8 @@ export default function PrescriptionPage() {
   const [patientAge, setPatientAge] = useState('');
   const [doctorName, setDoctorName] = useState('');
   const [prescriptionNo, setPrescriptionNo] = useState('');
+  const [diagnosis, setDiagnosis] = useState('');
+  const [action, setAction] = useState('');
 
   // Item Builder Resep Saat Ini
   const [prescriptionItems, setPrescriptionItems] = useState<PrescriptionItem[]>([]);
@@ -173,6 +177,11 @@ export default function PrescriptionPage() {
     const rxNo = prescriptionNo.trim() || `RXP-${Date.now().toString().slice(-6)}`;
     const deductionLogs: string[] = [];
 
+    const diagText = diagnosis.trim();
+    const actText = action.trim();
+    const diagPart = diagText ? ` | Diagnosa: ${diagText}` : '';
+    const actPart = actText ? ` | Tindakan: ${actText}` : '';
+
     // 1. Eksekusi pemotongan stok untuk setiap obat dalam resep
     for (const item of prescriptionItems) {
       const deductions = deductStockFEFO(item.medicine.id, item.baseQtyToDeduct);
@@ -197,7 +206,9 @@ export default function PrescriptionPage() {
         qtyChange: -item.baseQtyToDeduct,
         unitUsed: `${item.quantity} ${item.unit}`,
         referenceNumber: rxNo,
-        notes: `Pasien: ${patientName} (${patientAge || '-'}) | dr. ${doctorName || '-'} | Aturan: ${item.signa} | ${batchInfo}`,
+        notes: `Pasien: ${patientName} (${patientAge || '-'}) | dr. ${doctorName || '-'}${diagPart}${actPart} | Aturan: ${item.signa} | ${batchInfo}`,
+        diagnosis: diagText || undefined,
+        action: actText || undefined,
         createdAt: new Date().toISOString(),
       });
 
@@ -210,6 +221,8 @@ export default function PrescriptionPage() {
       patientName,
       patientAge,
       doctorName: doctorName || 'Dokter Umum',
+      diagnosis: diagText,
+      action: actText,
       date: new Date().toISOString(),
       items: [...prescriptionItems],
     });
@@ -222,6 +235,8 @@ export default function PrescriptionPage() {
     setPatientAge('');
     setDoctorName('');
     setPrescriptionNo('');
+    setDiagnosis('');
+    setAction('');
     refreshData();
 
     showNotification('success', `Pengurangan stok resep ${rxNo} berhasil diproses.`);
@@ -289,7 +304,7 @@ export default function PrescriptionPage() {
               </div>
             </div>
 
-            <div className="form-row">
+            <div className="form-row" style={{ marginBottom: 'var(--sp-3)' }}>
               <div className="form-group">
                 <label className="form-label">Nama Dokter / Klinik</label>
                 <input
@@ -309,6 +324,54 @@ export default function PrescriptionPage() {
                   value={prescriptionNo}
                   onChange={(e) => setPrescriptionNo(e.target.value)}
                 />
+              </div>
+            </div>
+
+            <div className="form-row">
+              <div className="form-group">
+                <label className="form-label">Diagnosa</label>
+                <input
+                  type="text"
+                  list="diagnosa-list"
+                  className="form-input"
+                  placeholder="Contoh: ISPA, Hipertensi, Gastritis..."
+                  value={diagnosis}
+                  onChange={(e) => setDiagnosis(e.target.value)}
+                />
+                <datalist id="diagnosa-list">
+                  <option value="ISPA (Infeksi Saluran Pernapasan Akut)" />
+                  <option value="Hipertensi Primer" />
+                  <option value="Diabetes Melitus Tipe 2" />
+                  <option value="Gastritis / Dispepsia" />
+                  <option value="Faringitis Akut" />
+                  <option value="Cephalgia / Sakit Kepala" />
+                  <option value="Dermatitis Alergi" />
+                  <option value="Demam Tifoid" />
+                  <option value="Myalgia / Nyeri Otot" />
+                  <option value="Gastroenteritis Akut (GEA)" />
+                </datalist>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label">Tindakan</label>
+                <input
+                  type="text"
+                  list="tindakan-list"
+                  className="form-input"
+                  placeholder="Contoh: Pemberian Obat Oral, Edukasi..."
+                  value={action}
+                  onChange={(e) => setAction(e.target.value)}
+                />
+                <datalist id="tindakan-list">
+                  <option value="Pemberian Obat Oral & Konseling Farmasi" />
+                  <option value="Edukasi Kepatuhan & Aturan Minum Obat" />
+                  <option value="Injeksi Intramuskular (IM)" />
+                  <option value="Injeksi Intravena (IV)" />
+                  <option value="Nebulisasi Salbutamol" />
+                  <option value="Perawatan & Pembersihan Luka" />
+                  <option value="Pemeriksaan Tekanan Darah & Konseling" />
+                  <option value="Pemeriksaan Gula Darah & Edukasi Diet" />
+                </datalist>
               </div>
             </div>
           </div>
@@ -510,9 +573,26 @@ export default function PrescriptionPage() {
                 </table>
 
                 <div className="card card-compact" style={{ background: 'var(--slate-50)', marginBottom: 'var(--sp-4)' }}>
-                  <div className="text-sm">
-                    Pasien: <strong>{patientName || '(Nama Pasien Belum Diisi)'}</strong> | Dokter:{' '}
-                    <strong>{doctorName || 'Umum'}</strong>
+                  <div className="text-sm" style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                    <div>
+                      Pasien: <strong>{patientName || '(Nama Pasien Belum Diisi)'}</strong>{' '}
+                      {patientAge && `(${patientAge})`} | Dokter: <strong>{doctorName || 'Umum'}</strong>
+                    </div>
+                    {(diagnosis || action) && (
+                      <div style={{ fontSize: '0.8rem', color: 'var(--slate-600)', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        {diagnosis && (
+                          <span>
+                            Diagnosa: <strong style={{ color: 'var(--teal-700)' }}>{diagnosis}</strong>
+                          </span>
+                        )}
+                        {diagnosis && action && <span>&bull;</span>}
+                        {action && (
+                          <span>
+                            Tindakan: <strong style={{ color: 'var(--blue-700)' }}>{action}</strong>
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -560,7 +640,31 @@ export default function PrescriptionPage() {
                           <td className="text-right" style={{ color: 'var(--red-600)', fontWeight: 600 }}>
                             {m.qtyChange} {m.unitUsed?.includes('Biji') ? 'Biji' : (med?.category === 'TABLET' || med?.category === 'KAPSUL' ? 'Biji' : (med?.baseUnit || 'Biji'))}
                           </td>
-                          <td className="text-xs">{m.notes}</td>
+                          <td className="text-xs">
+                            <div style={{ lineHeight: '1.4' }}>
+                              {m.notes.includes(' | Diagnosa:') || m.notes.includes(' | Tindakan:') ? (
+                                <div>
+                                  <div>
+                                    {m.notes.split(' | ').filter(part => !part.startsWith('Diagnosa:') && !part.startsWith('Tindakan:')).join(' | ')}
+                                  </div>
+                                  <div style={{ display: 'flex', gap: '6px', marginTop: '4px', flexWrap: 'wrap' }}>
+                                    {m.notes.split(' | ').filter(part => part.startsWith('Diagnosa:')).map((diag, i) => (
+                                      <span key={i} className="badge badge-info" style={{ fontSize: '0.7rem', padding: '1px 6px' }}>
+                                        {diag}
+                                      </span>
+                                    ))}
+                                    {m.notes.split(' | ').filter(part => part.startsWith('Tindakan:')).map((act, i) => (
+                                      <span key={i} className="badge badge-warning" style={{ fontSize: '0.7rem', padding: '1px 6px', background: '#fef3c7', color: '#92400e' }}>
+                                        {act}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              ) : (
+                                m.notes
+                              )}
+                            </div>
+                          </td>
                         </tr>
                       );
                     })}
@@ -622,6 +726,16 @@ export default function PrescriptionPage() {
                           {completedPrescription.patientAge && `(${completedPrescription.patientAge})`}
                         </div>
                         <div>Dokter: {completedPrescription.doctorName}</div>
+                        {completedPrescription.diagnosis && (
+                          <div style={{ marginTop: '2px', color: '#0f766e', fontWeight: 600 }}>
+                            Diagnosa: <span>{completedPrescription.diagnosis}</span>
+                          </div>
+                        )}
+                        {completedPrescription.action && (
+                          <div style={{ marginTop: '2px', color: '#1d4ed8', fontWeight: 600 }}>
+                            Tindakan: <span>{completedPrescription.action}</span>
+                          </div>
+                        )}
                       </div>
 
                       <div

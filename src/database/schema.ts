@@ -107,6 +107,8 @@ export interface StockMutation {
   unitUsed: string;
   referenceNumber: string;
   notes: string;
+  diagnosis?: string;
+  action?: string;
   createdAt: string;
 }
 
