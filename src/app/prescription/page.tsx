@@ -327,52 +327,37 @@ export default function PrescriptionPage() {
               </div>
             </div>
 
-            <div className="form-row">
-              <div className="form-group">
-                <label className="form-label">Diagnosa</label>
-                <input
-                  type="text"
-                  list="diagnosa-list"
-                  className="form-input"
-                  placeholder="Contoh: ISPA, Hipertensi, Gastritis..."
-                  value={diagnosis}
-                  onChange={(e) => setDiagnosis(e.target.value)}
-                />
-                <datalist id="diagnosa-list">
-                  <option value="ISPA (Infeksi Saluran Pernapasan Akut)" />
-                  <option value="Hipertensi Primer" />
-                  <option value="Diabetes Melitus Tipe 2" />
-                  <option value="Gastritis / Dispepsia" />
-                  <option value="Faringitis Akut" />
-                  <option value="Cephalgia / Sakit Kepala" />
-                  <option value="Dermatitis Alergi" />
-                  <option value="Demam Tifoid" />
-                  <option value="Myalgia / Nyeri Otot" />
-                  <option value="Gastroenteritis Akut (GEA)" />
-                </datalist>
-              </div>
+            <div className="form-group" style={{ marginBottom: 'var(--sp-3)' }}>
+              <label className="form-label">Diagnosa</label>
+              <textarea
+                className="form-input"
+                rows={3}
+                placeholder="Ketik diagnosa pasien di sini..."
+                value={diagnosis}
+                onChange={(e) => setDiagnosis(e.target.value)}
+              />
+            </div>
 
-              <div className="form-group">
-                <label className="form-label">Tindakan</label>
-                <input
-                  type="text"
-                  list="tindakan-list"
-                  className="form-input"
-                  placeholder="Contoh: Pemberian Obat Oral, Edukasi..."
-                  value={action}
-                  onChange={(e) => setAction(e.target.value)}
-                />
-                <datalist id="tindakan-list">
-                  <option value="Pemberian Obat Oral & Konseling Farmasi" />
-                  <option value="Edukasi Kepatuhan & Aturan Minum Obat" />
-                  <option value="Injeksi Intramuskular (IM)" />
-                  <option value="Injeksi Intravena (IV)" />
-                  <option value="Nebulisasi Salbutamol" />
-                  <option value="Perawatan & Pembersihan Luka" />
-                  <option value="Pemeriksaan Tekanan Darah & Konseling" />
-                  <option value="Pemeriksaan Gula Darah & Edukasi Diet" />
-                </datalist>
-              </div>
+            <div className="form-group">
+              <label className="form-label">Tindakan</label>
+              <input
+                type="text"
+                list="tindakan-list"
+                className="form-input"
+                placeholder="Contoh: Pemberian Obat Oral, Edukasi..."
+                value={action}
+                onChange={(e) => setAction(e.target.value)}
+              />
+              <datalist id="tindakan-list">
+                <option value="Pemberian Obat Oral & Konseling Farmasi" />
+                <option value="Edukasi Kepatuhan & Aturan Minum Obat" />
+                <option value="Injeksi Intramuskular (IM)" />
+                <option value="Injeksi Intravena (IV)" />
+                <option value="Nebulisasi Salbutamol" />
+                <option value="Perawatan & Pembersihan Luka" />
+                <option value="Pemeriksaan Tekanan Darah & Konseling" />
+                <option value="Pemeriksaan Gula Darah & Edukasi Diet" />
+              </datalist>
             </div>
           </div>
 
