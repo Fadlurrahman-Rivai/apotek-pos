@@ -56,7 +56,7 @@ export default function PrescriptionPage() {
   const [selectedMedicineId, setSelectedMedicineId] = useState('');
   const [selectedUnit, setSelectedUnit] = useState('Biji');
   const [qtyInput, setQtyInput] = useState<string>('10');
-  const [signa, setSigna] = useState('3 x sehari 1 biji sesudah makan');
+  const [signa, setSigna] = useState('');
   const [labelType, setLabelType] = useState<'DALAM' | 'LUAR'>('DALAM');
 
   // Modal Cetak Etiket
@@ -98,18 +98,15 @@ export default function PrescriptionPage() {
     setSelectedMedicineId(medId);
     setSelectedUnit(primaryUnit);
 
-    // Otomatis tentukan label obat dalam vs obat luar & aturan pakai default
+    // Otomatis tentukan label obat dalam vs obat luar
     if (med.category === 'SALEP' || med.category === 'TETES') {
       setLabelType('LUAR');
-      setSigna(med.category === 'SALEP' ? 'Oleskan tipis pada bagian yang sakit 2x sehari' : 'Teteskan 1-2 tetes pada mata yang sakit 3x sehari');
       setQtyInput('1');
     } else if (med.category === 'SIRUP') {
       setLabelType('DALAM');
-      setSigna('3 x sehari 1 sendok takar (5ml) sesudah makan');
       setQtyInput('1');
     } else {
       setLabelType('DALAM');
-      setSigna('3 x sehari 1 biji sesudah makan');
       setQtyInput('10');
     }
   };
@@ -155,6 +152,7 @@ export default function PrescriptionPage() {
     };
 
     setPrescriptionItems([...prescriptionItems, newItem]);
+    setSigna('');
     showNotification('success', `${med.name} (${qty} ${selectedUnit}) ditambahkan ke lembar resep.`);
   };
 
@@ -237,6 +235,7 @@ export default function PrescriptionPage() {
     setPrescriptionNo('');
     setDiagnosis('');
     setAction('');
+    setSigna('');
     refreshData();
 
     showNotification('success', `Pengurangan stok resep ${rxNo} berhasil diproses.`);
@@ -425,7 +424,6 @@ export default function PrescriptionPage() {
                     onClick={() => {
                       setSelectedUnit('Biji');
                       setQtyInput(String(num));
-                      setSigna(`3 x sehari 1 biji sesudah makan`);
                     }}
                   >
                     {num} Biji
