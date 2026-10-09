@@ -341,22 +341,11 @@ export default function PrescriptionPage() {
               <label className="form-label">Tindakan</label>
               <input
                 type="text"
-                list="tindakan-list"
                 className="form-input"
                 placeholder="Contoh: Pemberian Obat Oral, Edukasi..."
                 value={action}
                 onChange={(e) => setAction(e.target.value)}
               />
-              <datalist id="tindakan-list">
-                <option value="Pemberian Obat Oral & Konseling Farmasi" />
-                <option value="Edukasi Kepatuhan & Aturan Minum Obat" />
-                <option value="Injeksi Intramuskular (IM)" />
-                <option value="Injeksi Intravena (IV)" />
-                <option value="Nebulisasi Salbutamol" />
-                <option value="Perawatan & Pembersihan Luka" />
-                <option value="Pemeriksaan Tekanan Darah & Konseling" />
-                <option value="Pemeriksaan Gula Darah & Edukasi Diet" />
-              </datalist>
             </div>
           </div>
 
