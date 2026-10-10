@@ -109,6 +109,7 @@ export interface StockMutation {
   notes: string;
   diagnosis?: string;
   action?: string;
+  paidAmount?: number;
   createdAt: string;
 }
 

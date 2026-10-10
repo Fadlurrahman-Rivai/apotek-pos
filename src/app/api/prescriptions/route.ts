@@ -15,7 +15,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { medicineId, batchId, baseQty, unitUsed, referenceNumber, notes, diagnosis, action } = body;
+    const { medicineId, batchId, baseQty, unitUsed, referenceNumber, notes, diagnosis, action, paidAmount } = body;
 
     const db = readServerDB();
 
@@ -38,6 +38,7 @@ export async function POST(request: Request) {
       notes: notes || 'Pengeluaran resep dokter',
       diagnosis: diagnosis || undefined,
       action: action || undefined,
+      paidAmount: paidAmount !== undefined ? Number(paidAmount) : undefined,
       createdAt: new Date().toISOString(),
     };
 
