@@ -3,6 +3,7 @@
 import React, { useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
+import { ThemeProvider } from '@/context/ThemeContext';
 import Sidebar from '@/components/layout/Sidebar';
 import AppInitializer from '@/components/layout/AppInitializer';
 
@@ -81,9 +82,11 @@ function MainLayoutContent({ children }: { children: React.ReactNode }) {
 
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
-    <AuthProvider>
-      <AppInitializer />
-      <MainLayoutContent>{children}</MainLayoutContent>
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <AppInitializer />
+        <MainLayoutContent>{children}</MainLayoutContent>
+      </AuthProvider>
+    </ThemeProvider>
   );
 }

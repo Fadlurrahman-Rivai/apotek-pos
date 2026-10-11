@@ -4,6 +4,7 @@ import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { useTheme } from '@/context/ThemeContext';
 import DatabaseConfigModal from '@/components/common/DatabaseConfigModal';
 import { isSupabaseReady } from '@/lib/supabase';
 
@@ -88,6 +89,24 @@ const icons = {
       <line x1="15" y1="5" x2="5" y2="15" />
     </svg>
   ),
+  sun: (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="5" />
+      <line x1="12" y1="1" x2="12" y2="3" />
+      <line x1="12" y1="21" x2="12" y2="23" />
+      <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+      <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+      <line x1="1" y1="12" x2="3" y2="12" />
+      <line x1="21" y1="12" x2="23" y2="12" />
+      <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+      <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+    </svg>
+  ),
+  moon: (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
+    </svg>
+  ),
 };
 
 const navItems: NavItem[] = [
@@ -107,6 +126,7 @@ export default function Sidebar() {
   const [showDbModal, setShowDbModal] = useState(false);
   const [isDbConnected, setIsDbConnected] = useState(false);
   const { user, logout, isAdmin } = useAuth();
+  const { toggleTheme, isDark } = useTheme();
 
   useEffect(() => {
     setIsDbConnected(isSupabaseReady());
@@ -183,6 +203,30 @@ export default function Sidebar() {
             <span>{isDbConnected ? '1 DB' : 'Lokal'}</span>
           </button>
         )}
+
+        {/* Tombol Dark Mode Mobile */}
+        <button
+          type="button"
+          onClick={toggleTheme}
+          style={{
+            background: isDark ? 'rgba(255, 255, 255, 0.1)' : 'var(--slate-100)',
+            border: '1px solid var(--slate-200)',
+            borderRadius: '50%',
+            width: '32px',
+            height: '32px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: isDark ? '#fbbf24' : 'var(--slate-700)',
+            cursor: 'pointer',
+            marginRight: '6px',
+            marginLeft: isAdmin ? '0' : 'auto',
+          }}
+          title={isDark ? 'Ganti ke Mode Terang' : 'Ganti ke Mode Gelap'}
+          aria-label="Toggle tema gelap/terang"
+        >
+          {isDark ? icons.sun : icons.moon}
+        </button>
 
         {user && (
           <div className="mobile-top-user">
@@ -433,6 +477,47 @@ export default function Sidebar() {
               </svg>
             </button>
           )}
+
+          {/* Tombol Pengalih Tema (Dark / Light Mode) */}
+          <button
+            type="button"
+            onClick={toggleTheme}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '7px 10px',
+              background: 'rgba(255, 255, 255, 0.05)',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+              borderRadius: '8px',
+              color: '#cbd5e1',
+              fontSize: '0.78rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              width: '100%',
+              transition: 'all 0.15s ease',
+            }}
+            title={isDark ? 'Ganti ke Mode Terang' : 'Ganti ke Mode Gelap'}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{ color: isDark ? '#fbbf24' : '#94a3b8', display: 'flex' }}>
+                {isDark ? icons.sun : icons.moon}
+              </span>
+              <span>{isDark ? 'Mode Terang' : 'Mode Gelap'}</span>
+            </div>
+            <span
+              style={{
+                fontSize: '0.68rem',
+                padding: '2px 7px',
+                borderRadius: '12px',
+                background: isDark ? 'rgba(251, 191, 36, 0.2)' : 'rgba(255, 255, 255, 0.1)',
+                color: isDark ? '#fde047' : '#94a3b8',
+                fontWeight: 700,
+              }}
+            >
+              {isDark ? 'Dark' : 'Light'}
+            </span>
+          </button>
 
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.72rem', color: 'var(--slate-400)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
