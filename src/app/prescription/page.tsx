@@ -18,7 +18,7 @@ import {
   SaleItem,
   SaleUnit,
 } from '@/database/schema';
-import { toBaseUnit, getPrescriptionUnits, getPriceForUnit } from '@/features/inventory/utils/conversion';
+import { toBaseUnit, getPrescriptionUnits } from '@/features/inventory/utils/conversion';
 import { formatDate, generateId, formatRupiah, formatNumberDots, parseNumberDots } from '@/lib/formatters';
 
 interface PrescriptionItem {
@@ -27,8 +27,6 @@ interface PrescriptionItem {
   unit: string;
   quantity: number;
   baseQtyToDeduct: number;
-  unitPrice: number;
-  subtotal: number;
   signa: string; // Aturan pakai (contoh: 3x sehari 1 tablet sesudah makan)
   labelType: 'DALAM' | 'LUAR'; // Etiket putih (obat dalam) vs biru (obat luar)
 }
@@ -41,8 +39,7 @@ interface CompletedPrescription {
   diagnosis?: string;
   action?: string;
   date: string;
-  medicinesCost: number;
-  prescriptionFee: number;
+  examinationFee: number;
   totalCost: number;
   paymentMethod: 'TUNAI' | 'QRIS' | 'TRANSFER';
   amountPaid: number;
@@ -55,26 +52,22 @@ export default function PrescriptionPage() {
   const [mutations, setMutations] = useState<StockMutation[]>([]);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  // Header Identitas Resep
+  // Header Identitas Resep & Pemeriksaan
   const [patientName, setPatientName] = useState('');
   const [patientAge, setPatientAge] = useState('');
   const [doctorName, setDoctorName] = useState('');
   const [prescriptionNo, setPrescriptionNo] = useState('');
   const [diagnosis, setDiagnosis] = useState('');
   const [action, setAction] = useState('');
+  const [examinationFee, setExaminationFee] = useState<number>(0);
 
   // Item Builder Resep Saat Ini
   const [prescriptionItems, setPrescriptionItems] = useState<PrescriptionItem[]>([]);
   const [selectedMedicineId, setSelectedMedicineId] = useState('');
   const [selectedUnit, setSelectedUnit] = useState('Biji');
   const [qtyInput, setQtyInput] = useState<string>('10');
-  const [unitPriceInput, setUnitPriceInput] = useState<string>('0');
-  const [isManualPrice, setIsManualPrice] = useState<boolean>(false);
   const [signa, setSigna] = useState('');
   const [labelType, setLabelType] = useState<'DALAM' | 'LUAR'>('DALAM');
-
-  // Biaya Tambahan & Jasa Resep (Tuslah / Embalase / Racik)
-  const [prescriptionFee, setPrescriptionFee] = useState<number>(0);
 
   // Metode & Pembayaran Pasien
   const [paymentMethod, setPaymentMethod] = useState<'TUNAI' | 'QRIS' | 'TRANSFER'>('TUNAI');
@@ -86,31 +79,22 @@ export default function PrescriptionPage() {
   const [showEtiketModal, setShowEtiketModal] = useState(false);
   const [modalTab, setModalTab] = useState<'KWITANSI' | 'ETIKET'>('KWITANSI');
 
-  const totalMedicinesCost = prescriptionItems.reduce((sum, item) => sum + item.subtotal, 0);
-  const totalPrescriptionBill = totalMedicinesCost + prescriptionFee;
-  const changeAmount = Math.max(0, patientPaid - totalPrescriptionBill);
+  const changeAmount = Math.max(0, patientPaid - examinationFee);
 
   useEffect(() => {
     if (!isManualPaid) {
-      setPatientPaid(totalPrescriptionBill);
+      setPatientPaid(examinationFee);
     }
-  }, [totalPrescriptionBill, isManualPaid]);
+  }, [examinationFee, isManualPaid]);
 
-  const getMutationPaidAmount = (m: StockMutation, med?: Medicine): number => {
-    if (typeof m.paidAmount === 'number') {
+  const getMutationPaidAmount = (m: StockMutation): number => {
+    if (typeof m.paidAmount === 'number' && m.paidAmount > 0) {
       return m.paidAmount;
     }
-    const match = m.notes.match(/(?:Bayar|Dibayar):\s*Rp\s*([\d.,]+)/i);
+    const match = m.notes.match(/(?:Bayar|Dibayar|Biaya Pemeriksaan):\s*Rp\s*([\d.,]+)/i);
     if (match) {
       const clean = match[1].replace(/\D/g, '');
       if (clean) return parseInt(clean, 10);
-    }
-    if (med) {
-      const parts = m.unitUsed.trim().split(' ');
-      const qty = parseFloat(parts[0]) || Math.abs(m.qtyChange);
-      const unit = parts.slice(1).join(' ') || (med.category === 'TABLET' || med.category === 'KAPSUL' ? 'Biji' : med.baseUnit);
-      const unitPrice = getPriceForUnit(med, unit);
-      return Math.round(unitPrice * qty);
     }
     return 0;
   };
@@ -121,17 +105,13 @@ export default function PrescriptionPage() {
     setPatientPaid(num);
   };
 
-  const handlePrescriptionFeeChange = (val: string) => {
+  const handleExaminationFeeChange = (val: string) => {
     const num = parseNumberDots(val);
-    setPrescriptionFee(num);
+    setExaminationFee(num);
+    if (!isManualPaid) {
+      setPatientPaid(num);
+    }
   };
-
-  const handleUnitPriceChange = (val: string) => {
-    setIsManualPrice(true);
-    const num = parseNumberDots(val);
-    setUnitPriceInput(formatNumberDots(num));
-  };
-
   useEffect(() => {
     initDB();
     refreshData();
@@ -149,12 +129,8 @@ export default function PrescriptionPage() {
     if (meds.length > 0 && !selectedMedicineId) {
       const first = meds[0];
       const units = getPrescriptionUnits(first);
-      const firstUnit = units[0] || 'Biji';
       setSelectedMedicineId(first.id);
-      setSelectedUnit(firstUnit);
-      const price = getPriceForUnit(first, firstUnit);
-      setUnitPriceInput(formatNumberDots(price) || '0');
-      setIsManualPrice(false);
+      setSelectedUnit(units[0] || 'Biji');
     }
   };
 
@@ -171,10 +147,6 @@ export default function PrescriptionPage() {
     setSelectedMedicineId(medId);
     setSelectedUnit(primaryUnit);
 
-    const price = getPriceForUnit(med, primaryUnit);
-    setUnitPriceInput(formatNumberDots(price) || '0');
-    setIsManualPrice(false);
-
     // Otomatis tentukan label obat dalam vs obat luar
     if (med.category === 'SALEP' || med.category === 'TETES') {
       setLabelType('LUAR');
@@ -190,12 +162,6 @@ export default function PrescriptionPage() {
 
   const handleUnitChange = (newUnit: string) => {
     setSelectedUnit(newUnit);
-    const med = medicines.find((m) => m.id === selectedMedicineId);
-    if (med) {
-      const price = getPriceForUnit(med, newUnit);
-      setUnitPriceInput(formatNumberDots(price) || '0');
-      setIsManualPrice(false);
-    }
   };
 
   // Tambahkan obat ke daftar resep
@@ -228,24 +194,19 @@ export default function PrescriptionPage() {
       return;
     }
 
-    const unitPrice = parseNumberDots(unitPriceInput) || getPriceForUnit(med, selectedUnit);
-    const subtotal = Math.round(unitPrice * qty);
-
     const newItem: PrescriptionItem = {
       id: generateId(),
       medicine: med,
       unit: selectedUnit,
       quantity: qty,
       baseQtyToDeduct: baseQty,
-      unitPrice,
-      subtotal,
       signa: signa.trim() || 'Sesuai petunjuk dokter',
       labelType,
     };
 
     setPrescriptionItems([...prescriptionItems, newItem]);
     setSigna('');
-    showNotification('success', `${med.name} (${qty} ${selectedUnit} @ ${formatRupiah(unitPrice)}) ditambahkan ke lembar resep.`);
+    showNotification('success', `${med.name} (${qty} ${selectedUnit}) ditambahkan ke lembar resep.`);
   };
 
   const handleRemoveItem = (id: string) => {
@@ -264,8 +225,8 @@ export default function PrescriptionPage() {
       return;
     }
 
-    if (paymentMethod === 'TUNAI' && patientPaid < totalPrescriptionBill) {
-      showNotification('error', `Nominal pembayaran pasien masih kurang! Total tagihan: ${formatRupiah(totalPrescriptionBill)}`);
+    if (paymentMethod === 'TUNAI' && patientPaid < examinationFee) {
+      showNotification('error', `Nominal pembayaran pasien masih kurang! Biaya pemeriksaan: ${formatRupiah(examinationFee)}`);
       return;
     }
 
@@ -277,7 +238,7 @@ export default function PrescriptionPage() {
     const diagPart = diagText ? ` | Diagnosa: ${diagText}` : '';
     const actPart = actText ? ` | Tindakan: ${actText}` : '';
 
-    const effectivePaid = paymentMethod !== 'TUNAI' ? totalPrescriptionBill : (patientPaid > 0 ? patientPaid : totalPrescriptionBill);
+    const effectivePaid = paymentMethod !== 'TUNAI' ? examinationFee : (patientPaid > 0 ? patientPaid : examinationFee);
 
     // 1. Eksekusi pemotongan stok untuk setiap obat dalam resep (FEFO)
     for (const item of prescriptionItems) {
@@ -303,52 +264,51 @@ export default function PrescriptionPage() {
         qtyChange: -item.baseQtyToDeduct,
         unitUsed: `${item.quantity} ${item.unit}`,
         referenceNumber: rxNo,
-        notes: `Pasien: ${patientName} (${patientAge || '-'}) | dr. ${doctorName || '-'}${diagPart}${actPart} | Bayar: ${formatRupiah(item.subtotal)} | Aturan: ${item.signa} | ${batchInfo}`,
+        notes: `Pasien: ${patientName} (${patientAge || '-'}) | dr. ${doctorName || '-'}${diagPart}${actPart} | Biaya Pemeriksaan: ${formatRupiah(examinationFee)} | Aturan: ${item.signa} | ${batchInfo}`,
         diagnosis: diagText || undefined,
         action: actText || undefined,
-        paidAmount: item.subtotal,
+        paidAmount: examinationFee,
         createdAt: new Date().toISOString(),
       });
 
       deductionLogs.push(`${item.medicine.name}: -${item.baseQtyToDeduct} ${item.medicine.baseUnit}`);
     }
 
-    // 2. Simpan Transaksi Penjualan Resmi (completeSale) agar tercatat di Dashboard & Laporan Keuangan
+    // 2. Simpan Transaksi Penjualan Resmi (completeSale)
     const saleId = generateId();
     const newSale: Sale = {
       id: saleId,
       invoiceNumber: rxNo,
-      totalAmount: totalPrescriptionBill,
+      totalAmount: examinationFee,
       amountPaid: effectivePaid,
-      changeAmount: Math.max(0, effectivePaid - totalPrescriptionBill),
+      changeAmount: Math.max(0, effectivePaid - examinationFee),
       createdAt: new Date().toISOString(),
     };
 
-    const saleItemsToSave: SaleItem[] = prescriptionItems.map((item) => ({
-      id: generateId(),
-      saleId,
-      medicineId: item.medicine.id,
-      batchId: null,
-      medicineName: item.medicine.name,
-      unit: item.unit as SaleUnit,
-      quantity: item.quantity,
-      unitPrice: item.unitPrice,
-      subtotal: item.subtotal,
-    }));
-
-    if (prescriptionFee > 0) {
-      saleItemsToSave.push({
+    const saleItemsToSave: SaleItem[] = [
+      {
         id: generateId(),
         saleId,
-        medicineId: 'FEE-RESEP',
+        medicineId: 'EXAM-FEE',
         batchId: null,
-        medicineName: 'Biaya Jasa / Embalase / Tuslah Resep',
+        medicineName: `Biaya Pemeriksaan & Pelayanan Medis (${patientName})`,
         unit: 'Paket' as SaleUnit,
         quantity: 1,
-        unitPrice: prescriptionFee,
-        subtotal: prescriptionFee,
-      });
-    }
+        unitPrice: examinationFee,
+        subtotal: examinationFee,
+      },
+      ...prescriptionItems.map((item) => ({
+        id: generateId(),
+        saleId,
+        medicineId: item.medicine.id,
+        batchId: null,
+        medicineName: item.medicine.name,
+        unit: item.unit as SaleUnit,
+        quantity: item.quantity,
+        unitPrice: 0,
+        subtotal: 0,
+      })),
+    ];
 
     completeSale(newSale, saleItemsToSave);
 
@@ -361,12 +321,11 @@ export default function PrescriptionPage() {
       diagnosis: diagText,
       action: actText,
       date: new Date().toISOString(),
-      medicinesCost: totalMedicinesCost,
-      prescriptionFee,
-      totalCost: totalPrescriptionBill,
+      examinationFee,
+      totalCost: examinationFee,
       paymentMethod,
       amountPaid: effectivePaid,
-      changeAmount: Math.max(0, effectivePaid - totalPrescriptionBill),
+      changeAmount: Math.max(0, effectivePaid - examinationFee),
       items: [...prescriptionItems],
     });
 
@@ -382,12 +341,12 @@ export default function PrescriptionPage() {
     setDiagnosis('');
     setAction('');
     setSigna('');
-    setPrescriptionFee(0);
+    setExaminationFee(0);
     setPatientPaid(0);
     setIsManualPaid(false);
     refreshData();
 
-    showNotification('success', `Pengeluaran resep & pembayaran ${rxNo} berhasil diproses.`);
+    showNotification('success', `Pengeluaran resep & pembayaran pemeriksaan ${rxNo} berhasil diproses.`);
   };
 
   const currentMed = medicines.find((m) => m.id === selectedMedicineId);
@@ -396,11 +355,6 @@ export default function PrescriptionPage() {
   const calculatedBaseUnits =
     currentMed && !isNaN(parseFloat(qtyInput))
       ? toBaseUnit(parseFloat(qtyInput), selectedUnit, currentMed)
-      : 0;
-  const currentParsedUnitPrice = parseNumberDots(unitPriceInput) || (currentMed ? getPriceForUnit(currentMed, selectedUnit) : 0);
-  const currentEstimatedTotal =
-    currentMed && !isNaN(parseFloat(qtyInput))
-      ? Math.round(currentParsedUnitPrice * parseFloat(qtyInput))
       : 0;
 
   return (
@@ -491,7 +445,7 @@ export default function PrescriptionPage() {
               />
             </div>
 
-            <div className="form-group">
+            <div className="form-group" style={{ marginBottom: 'var(--sp-3)' }}>
               <label className="form-label">Tindakan</label>
               <input
                 type="text"
@@ -500,6 +454,61 @@ export default function PrescriptionPage() {
                 value={action}
                 onChange={(e) => setAction(e.target.value)}
               />
+            </div>
+
+            {/* Kolom Biaya Pembayaran Pemeriksaan */}
+            <div className="form-group">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                <label className="form-label" style={{ fontWeight: 700, color: 'var(--teal-800)', marginBottom: 0 }}>
+                  Biaya Pembayaran Pemeriksaan (Rp) *
+                </label>
+                <span className="text-xs text-muted">Untuk seluruh pemeriksaan &amp; tindakan</span>
+              </div>
+              <div style={{ position: 'relative' }}>
+                <span
+                  style={{
+                    position: 'absolute',
+                    left: '12px',
+                    top: '50%',
+                    transform: 'translateY(-50%)',
+                    color: 'var(--slate-400)',
+                    fontSize: '0.95rem',
+                    fontWeight: 700,
+                  }}
+                >
+                  Rp
+                </span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  className="form-input"
+                  style={{ paddingLeft: '40px', fontWeight: 800, fontSize: '1.05rem', color: 'var(--teal-900)' }}
+                  placeholder="0"
+                  value={formatNumberDots(examinationFee)}
+                  onChange={(e) => handleExaminationFeeChange(e.target.value)}
+                />
+              </div>
+
+              {/* Pilihan Cepat Nominal Pemeriksaan */}
+              <div style={{ display: 'flex', gap: '6px', marginTop: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                <span className="text-xs text-muted" style={{ marginRight: '2px' }}>Pilihan Cepat:</span>
+                {[0, 30000, 50000, 75000, 100000, 150000].map((fee) => (
+                  <button
+                    key={fee}
+                    type="button"
+                    className={`btn btn-xs ${examinationFee === fee ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => {
+                      setExaminationFee(fee);
+                      if (!isManualPaid) {
+                        setPatientPaid(fee);
+                      }
+                    }}
+                    style={{ fontSize: '0.75rem', padding: '2px 8px' }}
+                  >
+                    {fee === 0 ? 'Gratis (Rp 0)' : `${fee / 1000} Rb`}
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
 
@@ -589,71 +598,6 @@ export default function PrescriptionPage() {
               </div>
             )}
 
-            {/* Input Harga Pembayaran per Satuan & Estimasi Subtotal */}
-            <div
-              className="card card-compact"
-              style={{
-                background: 'var(--slate-50)',
-                borderColor: 'var(--slate-200)',
-                marginBottom: 'var(--sp-3)',
-                padding: 'var(--sp-3)',
-              }}
-            >
-              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 'var(--sp-3)', alignItems: 'center' }}>
-                <div className="form-group" style={{ marginBottom: 0 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                    <label className="form-label" style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: 0 }}>
-                      Harga Pembayaran per {selectedUnit} (Rp) *
-                    </label>
-                    {isManualPrice ? (
-                      <span className="badge badge-warning" style={{ fontSize: '0.68rem', padding: '1px 6px' }}>
-                        Disesuaikan
-                      </span>
-                    ) : (
-                      <span className="badge badge-neutral" style={{ fontSize: '0.68rem', padding: '1px 6px' }}>
-                        Harga Master
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ position: 'relative' }}>
-                    <span
-                      style={{
-                        position: 'absolute',
-                        left: '10px',
-                        top: '50%',
-                        transform: 'translateY(-50%)',
-                        color: 'var(--slate-400)',
-                        fontSize: '0.85rem',
-                        fontWeight: 700,
-                      }}
-                    >
-                      Rp
-                    </span>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      className="form-input"
-                      style={{ paddingLeft: '36px', fontWeight: 700 }}
-                      value={unitPriceInput}
-                      onChange={(e) => handleUnitPriceChange(e.target.value)}
-                      placeholder="0"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <div className="text-xs text-muted" style={{ fontWeight: 600, marginBottom: '2px' }}>
-                    Estimasi Subtotal Obat
-                  </div>
-                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--teal-700)' }}>
-                    {formatRupiah(currentEstimatedTotal)}
-                  </div>
-                  <div className="text-xs text-muted">
-                    {qtyInput || 0} {selectedUnit} &times; {formatRupiah(currentParsedUnitPrice)}
-                  </div>
-                </div>
-              </div>
-            </div>
             {currentMed && (
               <div
                 className="card card-compact"
@@ -731,8 +675,6 @@ export default function PrescriptionPage() {
                       <th>Nama Obat</th>
                       <th>Jumlah Resep</th>
                       <th className="text-right">Potong Stok Fisik</th>
-                      <th className="text-right">Harga Satuan</th>
-                      <th className="text-right">Subtotal Biaya</th>
                       <th>Aturan Pakai</th>
                       <th className="text-center">Aksi</th>
                     </tr>
@@ -752,12 +694,6 @@ export default function PrescriptionPage() {
                         <td className="text-right" style={{ fontWeight: 700, color: 'var(--red-600)' }}>
                           -{item.baseQtyToDeduct} {item.unit === 'Biji' ? 'Biji' : item.medicine.baseUnit}
                         </td>
-                        <td className="text-right" style={{ color: 'var(--slate-600)', fontSize: '0.875rem' }}>
-                          {formatRupiah(item.unitPrice)}
-                        </td>
-                        <td className="text-right" style={{ fontWeight: 700, color: 'var(--teal-700)' }}>
-                          {formatRupiah(item.subtotal)}
-                        </td>
                         <td className="text-sm">{item.signa}</td>
                         <td className="text-center">
                           <button
@@ -773,16 +709,16 @@ export default function PrescriptionPage() {
                   </tbody>
                   <tfoot>
                     <tr style={{ background: 'var(--slate-50)', fontWeight: 700 }}>
-                      <td colSpan={4} className="text-right">Subtotal Seluruh Obat:</td>
-                      <td className="text-right" style={{ color: 'var(--teal-800)', fontSize: '0.95rem' }}>
-                        {formatRupiah(totalMedicinesCost)}
+                      <td colSpan={2}>Total Obat Diresepkan:</td>
+                      <td className="text-right" style={{ color: 'var(--teal-800)' }}>
+                        {prescriptionItems.length} Obat
                       </td>
                       <td colSpan={2}></td>
                     </tr>
                   </tfoot>
                 </table>
 
-                {/* Rincian Pembayaran Resep Lengkap */}
+                {/* Rincian Pembayaran Pemeriksaan & Resep */}
                 <div
                   className="card card-compact"
                   style={{
@@ -792,21 +728,20 @@ export default function PrescriptionPage() {
                     padding: 'var(--sp-4)',
                   }}
                 >
-                  {/* Baris 1: Subtotal Obat, Biaya Resep, Total Tagihan */}
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 'var(--sp-4)', marginBottom: 'var(--sp-3)', paddingBottom: 'var(--sp-3)', borderBottom: '1px solid var(--slate-200)' }}>
+                  {/* Baris 1: Biaya Pembayaran Pemeriksaan */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 'var(--sp-4)', marginBottom: 'var(--sp-3)', paddingBottom: 'var(--sp-3)', borderBottom: '1px solid var(--slate-200)', alignItems: 'center' }}>
                     <div>
-                      <div className="text-xs text-muted" style={{ fontWeight: 600 }}>Subtotal Biaya Obat</div>
-                      <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--slate-700)' }}>
-                        {formatRupiah(totalMedicinesCost)}
+                      <div className="text-xs text-muted" style={{ fontWeight: 600 }}>Total Biaya Pembayaran</div>
+                      <div style={{ fontSize: '1.45rem', fontWeight: 800, color: 'var(--teal-700)' }}>
+                        {formatRupiah(examinationFee)}
                       </div>
+                      <div className="text-xs text-muted">Biaya mencakup seluruh pemeriksaan &amp; tindakan yang dilakukan</div>
                     </div>
 
                     <div className="form-group" style={{ marginBottom: 0 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                        <label className="form-label" style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: 0 }}>
-                          Biaya Jasa / Embalase (Rp)
-                        </label>
-                      </div>
+                      <label className="form-label" style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>
+                        Biaya Pemeriksaan (Rp)
+                      </label>
                       <div style={{ position: 'relative' }}>
                         <span
                           style={{
@@ -826,31 +761,10 @@ export default function PrescriptionPage() {
                           inputMode="numeric"
                           className="form-input"
                           style={{ paddingLeft: '36px', fontWeight: 700 }}
-                          value={formatNumberDots(prescriptionFee)}
-                          onChange={(e) => handlePrescriptionFeeChange(e.target.value)}
+                          value={formatNumberDots(examinationFee)}
+                          onChange={(e) => handleExaminationFeeChange(e.target.value)}
                           placeholder="0"
                         />
-                      </div>
-                      {/* Tombol biaya cepat */}
-                      <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
-                        {[0, 2000, 3000, 5000].map((fee) => (
-                          <button
-                            key={fee}
-                            type="button"
-                            className={`btn btn-xs ${prescriptionFee === fee ? 'btn-primary' : 'btn-secondary'}`}
-                            onClick={() => setPrescriptionFee(fee)}
-                            style={{ fontSize: '0.72rem', padding: '2px 6px' }}
-                          >
-                            {fee === 0 ? 'Rp 0' : `+${fee / 1000}k`}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="text-xs text-muted" style={{ fontWeight: 600 }}>Total Tagihan Resep</div>
-                      <div style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--teal-700)' }}>
-                        {formatRupiah(totalPrescriptionBill)}
                       </div>
                     </div>
                   </div>
@@ -871,7 +785,7 @@ export default function PrescriptionPage() {
                             onClick={() => {
                               setPaymentMethod(m);
                               if (m !== 'TUNAI') {
-                                setPatientPaid(totalPrescriptionBill);
+                                setPatientPaid(examinationFee);
                                 setIsManualPaid(false);
                               }
                             }}
@@ -907,7 +821,7 @@ export default function PrescriptionPage() {
                           inputMode="numeric"
                           className="form-input"
                           style={{ paddingLeft: '36px', fontWeight: 700 }}
-                          placeholder={formatNumberDots(totalPrescriptionBill) || '0'}
+                          placeholder={formatNumberDots(examinationFee) || '0'}
                           value={formatNumberDots(patientPaid)}
                           onChange={(e) => handlePaidChange(e.target.value)}
                           disabled={paymentMethod !== 'TUNAI'}
@@ -926,16 +840,16 @@ export default function PrescriptionPage() {
                           fontWeight: 700,
                           marginTop: '4px',
                           color:
-                            paymentMethod !== 'TUNAI' || patientPaid >= totalPrescriptionBill
+                            paymentMethod !== 'TUNAI' || patientPaid >= examinationFee
                               ? 'var(--green-700)'
                               : 'var(--amber-700)',
                         }}
                       >
                         {paymentMethod !== 'TUNAI'
                           ? 'Lunas Non-Tunai'
-                          : patientPaid >= totalPrescriptionBill
+                          : patientPaid >= examinationFee
                           ? formatRupiah(changeAmount)
-                          : `Kurang ${formatRupiah(totalPrescriptionBill - patientPaid)}`}
+                          : `Kurang ${formatRupiah(examinationFee - patientPaid)}`}
                       </div>
                     </div>
                   </div>
@@ -948,12 +862,12 @@ export default function PrescriptionPage() {
                         type="button"
                         className="btn btn-secondary btn-sm"
                         onClick={() => {
-                          setPatientPaid(totalPrescriptionBill);
+                          setPatientPaid(examinationFee);
                           setIsManualPaid(false);
                         }}
-                        disabled={totalPrescriptionBill === 0}
+                        disabled={examinationFee === 0}
                       >
-                        Uang Pas ({formatRupiah(totalPrescriptionBill)})
+                        Uang Pas ({formatRupiah(examinationFee)})
                       </button>
                       {[20000, 50000, 100000, 200000].map((nominal) => (
                         <button
@@ -964,7 +878,7 @@ export default function PrescriptionPage() {
                             setPatientPaid(nominal);
                             setIsManualPaid(true);
                           }}
-                          disabled={totalPrescriptionBill === 0}
+                          disabled={examinationFee === 0}
                         >
                           {nominal >= 1000 ? `${nominal / 1000} Rb` : formatRupiah(nominal)}
                         </button>
@@ -1024,14 +938,14 @@ export default function PrescriptionPage() {
                       <th>Obat</th>
                       <th>Satuan Diambil</th>
                       <th className="text-right">Stok Terpotong</th>
-                      <th className="text-right">Jumlah yang Dibayar Pasien</th>
+                      <th className="text-right">Biaya Pembayaran (Pemeriksaan)</th>
                       <th>Keterangan Resep</th>
                     </tr>
                   </thead>
                   <tbody>
                     {mutations.slice(0, 10).map((m) => {
                       const med = medicines.find((item) => item.id === m.medicineId);
-                      const paid = getMutationPaidAmount(m, med);
+                      const paid = getMutationPaidAmount(m);
                       return (
                         <tr key={m.id}>
                           <td className="text-xs text-muted">
@@ -1165,8 +1079,7 @@ export default function PrescriptionPage() {
                         <tr style={{ background: '#f1f5f9' }}>
                           <th>Nama Obat &amp; Signa</th>
                           <th className="text-center">Jumlah</th>
-                          <th className="text-right">Harga Satuan</th>
-                          <th className="text-right">Subtotal</th>
+                          <th>Keterangan</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1177,33 +1090,26 @@ export default function PrescriptionPage() {
                               <div className="text-xs text-muted">Aturan: {item.signa}</div>
                             </td>
                             <td className="text-center">{item.quantity} {item.unit}</td>
-                            <td className="text-right">{formatRupiah(item.unitPrice)}</td>
-                            <td className="text-right" style={{ fontWeight: 700 }}>{formatRupiah(item.subtotal)}</td>
+                            <td className="text-xs">{item.labelType === 'DALAM' ? 'Obat Dalam' : 'Obat Luar'}</td>
                           </tr>
                         ))}
                       </tbody>
                       <tfoot>
-                        <tr>
-                          <td colSpan={3} className="text-right" style={{ fontWeight: 600 }}>Subtotal Biaya Obat:</td>
-                          <td className="text-right" style={{ fontWeight: 700 }}>{formatRupiah(completedPrescription.medicinesCost)}</td>
-                        </tr>
-                        {completedPrescription.prescriptionFee > 0 && (
-                          <tr>
-                            <td colSpan={3} className="text-right" style={{ fontWeight: 600 }}>Biaya Jasa / Embalase Resep:</td>
-                            <td className="text-right" style={{ fontWeight: 700, color: '#0f766e' }}>{formatRupiah(completedPrescription.prescriptionFee)}</td>
-                          </tr>
-                        )}
                         <tr style={{ background: '#f8fafc', fontSize: '1rem' }}>
-                          <td colSpan={3} className="text-right" style={{ fontWeight: 800, color: '#0f766e' }}>TOTAL TAGIHAN:</td>
-                          <td className="text-right" style={{ fontWeight: 800, color: '#0f766e', fontSize: '1.1rem' }}>{formatRupiah(completedPrescription.totalCost)}</td>
+                          <td colSpan={2} className="text-right" style={{ fontWeight: 800, color: '#0f766e' }}>
+                            BIAYA PEMBAYARAN PEMERIKSAAN:
+                          </td>
+                          <td className="text-right" style={{ fontWeight: 800, color: '#0f766e', fontSize: '1.1rem' }}>
+                            {formatRupiah(completedPrescription.examinationFee)}
+                          </td>
                         </tr>
                         <tr>
-                          <td colSpan={3} className="text-right">Jumlah Dibayar Pasien:</td>
+                          <td colSpan={2} className="text-right">Jumlah Dibayar Pasien:</td>
                           <td className="text-right" style={{ fontWeight: 700 }}>{formatRupiah(completedPrescription.amountPaid)}</td>
                         </tr>
                         {completedPrescription.changeAmount > 0 && (
                           <tr>
-                            <td colSpan={3} className="text-right" style={{ color: '#16a34a', fontWeight: 600 }}>Kembalian Pasien:</td>
+                            <td colSpan={2} className="text-right" style={{ color: '#16a34a', fontWeight: 600 }}>Kembalian Pasien:</td>
                             <td className="text-right" style={{ fontWeight: 700, color: '#16a34a' }}>{formatRupiah(completedPrescription.changeAmount)}</td>
                           </tr>
                         )}
