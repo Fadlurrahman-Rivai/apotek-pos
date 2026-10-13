@@ -8,11 +8,15 @@ import {
   addMutation,
   getMutations,
   initDB,
+  completeSale,
 } from '@/database/db';
 import {
   Medicine,
   StockMutation,
   MutationType,
+  Sale,
+  SaleItem,
+  SaleUnit,
 } from '@/database/schema';
 import { toBaseUnit, getPrescriptionUnits, getPriceForUnit } from '@/features/inventory/utils/conversion';
 import { formatDate, generateId, formatRupiah, formatNumberDots, parseNumberDots } from '@/lib/formatters';
@@ -37,7 +41,10 @@ interface CompletedPrescription {
   diagnosis?: string;
   action?: string;
   date: string;
+  medicinesCost: number;
+  prescriptionFee: number;
   totalCost: number;
+  paymentMethod: 'TUNAI' | 'QRIS' | 'TRANSFER';
   amountPaid: number;
   changeAmount: number;
   items: PrescriptionItem[];
@@ -61,25 +68,33 @@ export default function PrescriptionPage() {
   const [selectedMedicineId, setSelectedMedicineId] = useState('');
   const [selectedUnit, setSelectedUnit] = useState('Biji');
   const [qtyInput, setQtyInput] = useState<string>('10');
+  const [unitPriceInput, setUnitPriceInput] = useState<string>('0');
+  const [isManualPrice, setIsManualPrice] = useState<boolean>(false);
   const [signa, setSigna] = useState('');
   const [labelType, setLabelType] = useState<'DALAM' | 'LUAR'>('DALAM');
 
-  // Pembayaran Pasien
+  // Biaya Tambahan & Jasa Resep (Tuslah / Embalase / Racik)
+  const [prescriptionFee, setPrescriptionFee] = useState<number>(0);
+
+  // Metode & Pembayaran Pasien
+  const [paymentMethod, setPaymentMethod] = useState<'TUNAI' | 'QRIS' | 'TRANSFER'>('TUNAI');
   const [patientPaid, setPatientPaid] = useState<number>(0);
   const [isManualPaid, setIsManualPaid] = useState<boolean>(false);
 
-  // Modal Cetak Etiket
+  // Modal Cetak Etiket & Kwitansi
   const [completedPrescription, setCompletedPrescription] = useState<CompletedPrescription | null>(null);
   const [showEtiketModal, setShowEtiketModal] = useState(false);
+  const [modalTab, setModalTab] = useState<'KWITANSI' | 'ETIKET'>('KWITANSI');
 
-  const totalCalculatedCost = prescriptionItems.reduce((sum, item) => sum + item.subtotal, 0);
-  const changeAmount = Math.max(0, patientPaid - totalCalculatedCost);
+  const totalMedicinesCost = prescriptionItems.reduce((sum, item) => sum + item.subtotal, 0);
+  const totalPrescriptionBill = totalMedicinesCost + prescriptionFee;
+  const changeAmount = Math.max(0, patientPaid - totalPrescriptionBill);
 
   useEffect(() => {
     if (!isManualPaid) {
-      setPatientPaid(totalCalculatedCost);
+      setPatientPaid(totalPrescriptionBill);
     }
-  }, [totalCalculatedCost, isManualPaid]);
+  }, [totalPrescriptionBill, isManualPaid]);
 
   const getMutationPaidAmount = (m: StockMutation, med?: Medicine): number => {
     if (typeof m.paidAmount === 'number') {
@@ -106,6 +121,17 @@ export default function PrescriptionPage() {
     setPatientPaid(num);
   };
 
+  const handlePrescriptionFeeChange = (val: string) => {
+    const num = parseNumberDots(val);
+    setPrescriptionFee(num);
+  };
+
+  const handleUnitPriceChange = (val: string) => {
+    setIsManualPrice(true);
+    const num = parseNumberDots(val);
+    setUnitPriceInput(formatNumberDots(num));
+  };
+
   useEffect(() => {
     initDB();
     refreshData();
@@ -123,8 +149,12 @@ export default function PrescriptionPage() {
     if (meds.length > 0 && !selectedMedicineId) {
       const first = meds[0];
       const units = getPrescriptionUnits(first);
+      const firstUnit = units[0] || 'Biji';
       setSelectedMedicineId(first.id);
-      setSelectedUnit(units[0] || 'Biji');
+      setSelectedUnit(firstUnit);
+      const price = getPriceForUnit(first, firstUnit);
+      setUnitPriceInput(formatNumberDots(price) || '0');
+      setIsManualPrice(false);
     }
   };
 
@@ -141,6 +171,10 @@ export default function PrescriptionPage() {
     setSelectedMedicineId(medId);
     setSelectedUnit(primaryUnit);
 
+    const price = getPriceForUnit(med, primaryUnit);
+    setUnitPriceInput(formatNumberDots(price) || '0');
+    setIsManualPrice(false);
+
     // Otomatis tentukan label obat dalam vs obat luar
     if (med.category === 'SALEP' || med.category === 'TETES') {
       setLabelType('LUAR');
@@ -151,6 +185,16 @@ export default function PrescriptionPage() {
     } else {
       setLabelType('DALAM');
       setQtyInput('10');
+    }
+  };
+
+  const handleUnitChange = (newUnit: string) => {
+    setSelectedUnit(newUnit);
+    const med = medicines.find((m) => m.id === selectedMedicineId);
+    if (med) {
+      const price = getPriceForUnit(med, newUnit);
+      setUnitPriceInput(formatNumberDots(price) || '0');
+      setIsManualPrice(false);
     }
   };
 
@@ -184,7 +228,7 @@ export default function PrescriptionPage() {
       return;
     }
 
-    const unitPrice = getPriceForUnit(med, selectedUnit);
+    const unitPrice = parseNumberDots(unitPriceInput) || getPriceForUnit(med, selectedUnit);
     const subtotal = Math.round(unitPrice * qty);
 
     const newItem: PrescriptionItem = {
@@ -201,7 +245,7 @@ export default function PrescriptionPage() {
 
     setPrescriptionItems([...prescriptionItems, newItem]);
     setSigna('');
-    showNotification('success', `${med.name} (${qty} ${selectedUnit}) ditambahkan ke lembar resep.`);
+    showNotification('success', `${med.name} (${qty} ${selectedUnit} @ ${formatRupiah(unitPrice)}) ditambahkan ke lembar resep.`);
   };
 
   const handleRemoveItem = (id: string) => {
@@ -220,6 +264,11 @@ export default function PrescriptionPage() {
       return;
     }
 
+    if (paymentMethod === 'TUNAI' && patientPaid < totalPrescriptionBill) {
+      showNotification('error', `Nominal pembayaran pasien masih kurang! Total tagihan: ${formatRupiah(totalPrescriptionBill)}`);
+      return;
+    }
+
     const rxNo = prescriptionNo.trim() || `RXP-${Date.now().toString().slice(-6)}`;
     const deductionLogs: string[] = [];
 
@@ -228,9 +277,9 @@ export default function PrescriptionPage() {
     const diagPart = diagText ? ` | Diagnosa: ${diagText}` : '';
     const actPart = actText ? ` | Tindakan: ${actText}` : '';
 
-    const effectivePaid = patientPaid > 0 ? patientPaid : totalCalculatedCost;
+    const effectivePaid = paymentMethod !== 'TUNAI' ? totalPrescriptionBill : (patientPaid > 0 ? patientPaid : totalPrescriptionBill);
 
-    // 1. Eksekusi pemotongan stok untuk setiap obat dalam resep
+    // 1. Eksekusi pemotongan stok untuk setiap obat dalam resep (FEFO)
     for (const item of prescriptionItems) {
       const deductions = deductStockFEFO(item.medicine.id, item.baseQtyToDeduct);
 
@@ -264,7 +313,46 @@ export default function PrescriptionPage() {
       deductionLogs.push(`${item.medicine.name}: -${item.baseQtyToDeduct} ${item.medicine.baseUnit}`);
     }
 
-    // Set data etiket & ringkasan resep
+    // 2. Simpan Transaksi Penjualan Resmi (completeSale) agar tercatat di Dashboard & Laporan Keuangan
+    const saleId = generateId();
+    const newSale: Sale = {
+      id: saleId,
+      invoiceNumber: rxNo,
+      totalAmount: totalPrescriptionBill,
+      amountPaid: effectivePaid,
+      changeAmount: Math.max(0, effectivePaid - totalPrescriptionBill),
+      createdAt: new Date().toISOString(),
+    };
+
+    const saleItemsToSave: SaleItem[] = prescriptionItems.map((item) => ({
+      id: generateId(),
+      saleId,
+      medicineId: item.medicine.id,
+      batchId: null,
+      medicineName: item.medicine.name,
+      unit: item.unit as SaleUnit,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      subtotal: item.subtotal,
+    }));
+
+    if (prescriptionFee > 0) {
+      saleItemsToSave.push({
+        id: generateId(),
+        saleId,
+        medicineId: 'FEE-RESEP',
+        batchId: null,
+        medicineName: 'Biaya Jasa / Embalase / Tuslah Resep',
+        unit: 'Paket' as SaleUnit,
+        quantity: 1,
+        unitPrice: prescriptionFee,
+        subtotal: prescriptionFee,
+      });
+    }
+
+    completeSale(newSale, saleItemsToSave);
+
+    // 3. Set data etiket & kwitansi pembayaran resep
     setCompletedPrescription({
       recipeNo: rxNo,
       patientName,
@@ -273,12 +361,16 @@ export default function PrescriptionPage() {
       diagnosis: diagText,
       action: actText,
       date: new Date().toISOString(),
-      totalCost: totalCalculatedCost,
+      medicinesCost: totalMedicinesCost,
+      prescriptionFee,
+      totalCost: totalPrescriptionBill,
+      paymentMethod,
       amountPaid: effectivePaid,
-      changeAmount: Math.max(0, effectivePaid - totalCalculatedCost),
+      changeAmount: Math.max(0, effectivePaid - totalPrescriptionBill),
       items: [...prescriptionItems],
     });
 
+    setModalTab('KWITANSI');
     setShowEtiketModal(true);
 
     // Reset Form
@@ -290,11 +382,12 @@ export default function PrescriptionPage() {
     setDiagnosis('');
     setAction('');
     setSigna('');
+    setPrescriptionFee(0);
     setPatientPaid(0);
     setIsManualPaid(false);
     refreshData();
 
-    showNotification('success', `Pengurangan stok resep ${rxNo} berhasil diproses.`);
+    showNotification('success', `Pengeluaran resep & pembayaran ${rxNo} berhasil diproses.`);
   };
 
   const currentMed = medicines.find((m) => m.id === selectedMedicineId);
@@ -304,10 +397,10 @@ export default function PrescriptionPage() {
     currentMed && !isNaN(parseFloat(qtyInput))
       ? toBaseUnit(parseFloat(qtyInput), selectedUnit, currentMed)
       : 0;
-  const currentUnitPrice = currentMed ? getPriceForUnit(currentMed, selectedUnit) : 0;
+  const currentParsedUnitPrice = parseNumberDots(unitPriceInput) || (currentMed ? getPriceForUnit(currentMed, selectedUnit) : 0);
   const currentEstimatedTotal =
     currentMed && !isNaN(parseFloat(qtyInput))
-      ? Math.round(currentUnitPrice * parseFloat(qtyInput))
+      ? Math.round(currentParsedUnitPrice * parseFloat(qtyInput))
       : 0;
 
   return (
@@ -439,7 +532,7 @@ export default function PrescriptionPage() {
                 <select
                   className="form-select"
                   value={selectedUnit}
-                  onChange={(e) => setSelectedUnit(e.target.value)}
+                  onChange={(e) => handleUnitChange(e.target.value)}
                 >
                   {units.map((u) => (
                     <option key={u} value={u}>
@@ -496,6 +589,71 @@ export default function PrescriptionPage() {
               </div>
             )}
 
+            {/* Input Harga Pembayaran per Satuan & Estimasi Subtotal */}
+            <div
+              className="card card-compact"
+              style={{
+                background: 'var(--slate-50)',
+                borderColor: 'var(--slate-200)',
+                marginBottom: 'var(--sp-3)',
+                padding: 'var(--sp-3)',
+              }}
+            >
+              <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 'var(--sp-3)', alignItems: 'center' }}>
+                <div className="form-group" style={{ marginBottom: 0 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                    <label className="form-label" style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: 0 }}>
+                      Harga Pembayaran per {selectedUnit} (Rp) *
+                    </label>
+                    {isManualPrice ? (
+                      <span className="badge badge-warning" style={{ fontSize: '0.68rem', padding: '1px 6px' }}>
+                        Disesuaikan
+                      </span>
+                    ) : (
+                      <span className="badge badge-neutral" style={{ fontSize: '0.68rem', padding: '1px 6px' }}>
+                        Harga Master
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ position: 'relative' }}>
+                    <span
+                      style={{
+                        position: 'absolute',
+                        left: '10px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        color: 'var(--slate-400)',
+                        fontSize: '0.85rem',
+                        fontWeight: 700,
+                      }}
+                    >
+                      Rp
+                    </span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      className="form-input"
+                      style={{ paddingLeft: '36px', fontWeight: 700 }}
+                      value={unitPriceInput}
+                      onChange={(e) => handleUnitPriceChange(e.target.value)}
+                      placeholder="0"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <div className="text-xs text-muted" style={{ fontWeight: 600, marginBottom: '2px' }}>
+                    Estimasi Subtotal Obat
+                  </div>
+                  <div style={{ fontSize: '1.15rem', fontWeight: 800, color: 'var(--teal-700)' }}>
+                    {formatRupiah(currentEstimatedTotal)}
+                  </div>
+                  <div className="text-xs text-muted">
+                    {qtyInput || 0} {selectedUnit} &times; {formatRupiah(currentParsedUnitPrice)}
+                  </div>
+                </div>
+              </div>
+            </div>
             {currentMed && (
               <div
                 className="card card-compact"
@@ -506,10 +664,6 @@ export default function PrescriptionPage() {
                     Kalkulasi Pengurangan Stok: <strong>{qtyInput} {selectedUnit}</strong> akan memotong persis{' '}
                     <strong>{calculatedBaseUnits} {selectedUnit === 'Biji' ? 'Biji' : currentMed.baseUnit}</strong> dari stok pergudangan (Sisa stok:{' '}
                     {currentStock} {selectedUnit === 'Biji' ? 'Biji' : currentMed.baseUnit}).
-                  </div>
-                  <div>
-                    Harga Satuan ({selectedUnit}): <strong>{formatRupiah(currentUnitPrice)}</strong> &bull; Estimasi Biaya:{' '}
-                    <strong style={{ color: 'var(--teal-900)' }}>{formatRupiah(currentEstimatedTotal)}</strong>
                   </div>
                 </div>
               </div>
@@ -577,7 +731,8 @@ export default function PrescriptionPage() {
                       <th>Nama Obat</th>
                       <th>Jumlah Resep</th>
                       <th className="text-right">Potong Stok Fisik</th>
-                      <th className="text-right">Jumlah yang Dibayar Pasien</th>
+                      <th className="text-right">Harga Satuan</th>
+                      <th className="text-right">Subtotal Biaya</th>
                       <th>Aturan Pakai</th>
                       <th className="text-center">Aksi</th>
                     </tr>
@@ -597,6 +752,9 @@ export default function PrescriptionPage() {
                         <td className="text-right" style={{ fontWeight: 700, color: 'var(--red-600)' }}>
                           -{item.baseQtyToDeduct} {item.unit === 'Biji' ? 'Biji' : item.medicine.baseUnit}
                         </td>
+                        <td className="text-right" style={{ color: 'var(--slate-600)', fontSize: '0.875rem' }}>
+                          {formatRupiah(item.unitPrice)}
+                        </td>
                         <td className="text-right" style={{ fontWeight: 700, color: 'var(--teal-700)' }}>
                           {formatRupiah(item.subtotal)}
                         </td>
@@ -615,16 +773,16 @@ export default function PrescriptionPage() {
                   </tbody>
                   <tfoot>
                     <tr style={{ background: 'var(--slate-50)', fontWeight: 700 }}>
-                      <td colSpan={3} className="text-right">Total Biaya Resep:</td>
+                      <td colSpan={4} className="text-right">Subtotal Seluruh Obat:</td>
                       <td className="text-right" style={{ color: 'var(--teal-800)', fontSize: '0.95rem' }}>
-                        {formatRupiah(totalCalculatedCost)}
+                        {formatRupiah(totalMedicinesCost)}
                       </td>
                       <td colSpan={2}></td>
                     </tr>
                   </tfoot>
                 </table>
 
-                {/* Rincian Pembayaran Pasien */}
+                {/* Rincian Pembayaran Resep Lengkap */}
                 <div
                   className="card card-compact"
                   style={{
@@ -634,14 +792,98 @@ export default function PrescriptionPage() {
                     padding: 'var(--sp-4)',
                   }}
                 >
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 'var(--sp-3)', alignItems: 'center' }}>
+                  {/* Baris 1: Subtotal Obat, Biaya Resep, Total Tagihan */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 'var(--sp-4)', marginBottom: 'var(--sp-3)', paddingBottom: 'var(--sp-3)', borderBottom: '1px solid var(--slate-200)' }}>
                     <div>
-                      <div className="text-xs text-muted" style={{ fontWeight: 600 }}>Total Tagihan Resep</div>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--teal-700)' }}>
-                        {formatRupiah(totalCalculatedCost)}
+                      <div className="text-xs text-muted" style={{ fontWeight: 600 }}>Subtotal Biaya Obat</div>
+                      <div style={{ fontSize: '1.1rem', fontWeight: 700, color: 'var(--slate-700)' }}>
+                        {formatRupiah(totalMedicinesCost)}
                       </div>
                     </div>
 
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+                        <label className="form-label" style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: 0 }}>
+                          Biaya Jasa / Embalase (Rp)
+                        </label>
+                      </div>
+                      <div style={{ position: 'relative' }}>
+                        <span
+                          style={{
+                            position: 'absolute',
+                            left: '10px',
+                            top: '50%',
+                            transform: 'translateY(-50%)',
+                            color: 'var(--slate-400)',
+                            fontSize: '0.85rem',
+                            fontWeight: 700,
+                          }}
+                        >
+                          Rp
+                        </span>
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          className="form-input"
+                          style={{ paddingLeft: '36px', fontWeight: 700 }}
+                          value={formatNumberDots(prescriptionFee)}
+                          onChange={(e) => handlePrescriptionFeeChange(e.target.value)}
+                          placeholder="0"
+                        />
+                      </div>
+                      {/* Tombol biaya cepat */}
+                      <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
+                        {[0, 2000, 3000, 5000].map((fee) => (
+                          <button
+                            key={fee}
+                            type="button"
+                            className={`btn btn-xs ${prescriptionFee === fee ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => setPrescriptionFee(fee)}
+                            style={{ fontSize: '0.72rem', padding: '2px 6px' }}
+                          >
+                            {fee === 0 ? 'Rp 0' : `+${fee / 1000}k`}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-xs text-muted" style={{ fontWeight: 600 }}>Total Tagihan Resep</div>
+                      <div style={{ fontSize: '1.35rem', fontWeight: 800, color: 'var(--teal-700)' }}>
+                        {formatRupiah(totalPrescriptionBill)}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Baris 2: Metode Pembayaran, Jumlah Dibayar Pasien, Kembalian */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 'var(--sp-3)', alignItems: 'flex-start' }}>
+                    {/* Metode Pembayaran */}
+                    <div className="form-group" style={{ marginBottom: 0 }}>
+                      <label className="form-label" style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>
+                        Metode Pembayaran
+                      </label>
+                      <div style={{ display: 'flex', gap: '6px' }}>
+                        {(['TUNAI', 'QRIS', 'TRANSFER'] as const).map((m) => (
+                          <button
+                            key={m}
+                            type="button"
+                            className={`btn btn-sm ${paymentMethod === m ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => {
+                              setPaymentMethod(m);
+                              if (m !== 'TUNAI') {
+                                setPatientPaid(totalPrescriptionBill);
+                                setIsManualPaid(false);
+                              }
+                            }}
+                            style={{ flex: 1, padding: '6px 8px', fontSize: '0.8rem' }}
+                          >
+                            {m === 'TUNAI' ? 'Tunai' : m}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Input Jumlah Dibayar Pasien */}
                     <div className="form-group" style={{ marginBottom: 0 }}>
                       <label className="form-label" style={{ fontSize: '0.8rem', fontWeight: 600, marginBottom: '4px' }}>
                         Jumlah yang Dibayar Pasien (Rp)
@@ -665,66 +907,70 @@ export default function PrescriptionPage() {
                           inputMode="numeric"
                           className="form-input"
                           style={{ paddingLeft: '36px', fontWeight: 700 }}
-                          placeholder={formatNumberDots(totalCalculatedCost) || '0'}
+                          placeholder={formatNumberDots(totalPrescriptionBill) || '0'}
                           value={formatNumberDots(patientPaid)}
                           onChange={(e) => handlePaidChange(e.target.value)}
+                          disabled={paymentMethod !== 'TUNAI'}
                         />
                       </div>
                     </div>
 
+                    {/* Kembalian Pasien */}
                     <div>
-                      <div className="text-xs text-muted" style={{ fontWeight: 600 }}>Kembalian Pasien</div>
+                      <div className="text-xs text-muted" style={{ fontWeight: 600 }}>
+                        {paymentMethod === 'TUNAI' ? 'Kembalian Pasien' : 'Status Pembayaran'}
+                      </div>
                       <div
                         style={{
-                          fontSize: '1.1rem',
+                          fontSize: '1.15rem',
                           fontWeight: 700,
-                          color: patientPaid >= totalCalculatedCost ? 'var(--green-700)' : 'var(--amber-700)',
+                          marginTop: '4px',
+                          color:
+                            paymentMethod !== 'TUNAI' || patientPaid >= totalPrescriptionBill
+                              ? 'var(--green-700)'
+                              : 'var(--amber-700)',
                         }}
                       >
-                        {patientPaid >= totalCalculatedCost
+                        {paymentMethod !== 'TUNAI'
+                          ? 'Lunas Non-Tunai'
+                          : patientPaid >= totalPrescriptionBill
                           ? formatRupiah(changeAmount)
-                          : `Kurang ${formatRupiah(totalCalculatedCost - patientPaid)}`}
+                          : `Kurang ${formatRupiah(totalPrescriptionBill - patientPaid)}`}
                       </div>
                     </div>
                   </div>
 
-                  {/* Tombol Nominal Cepat */}
-                  <div style={{ display: 'flex', gap: '6px', marginTop: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
-                    <span className="text-xs text-muted" style={{ marginRight: '4px' }}>Nominal Cepat:</span>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => {
-                        setPatientPaid(totalCalculatedCost);
-                        setIsManualPaid(false);
-                      }}
-                      disabled={totalCalculatedCost === 0}
-                    >
-                      Uang Pas ({formatRupiah(totalCalculatedCost)})
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => {
-                        setPatientPaid(Math.ceil(totalCalculatedCost / 50000) * 50000 || 50000);
-                        setIsManualPaid(true);
-                      }}
-                      disabled={totalCalculatedCost === 0}
-                    >
-                      50 Rb
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => {
-                        setPatientPaid(Math.ceil(totalCalculatedCost / 100000) * 100000 || 100000);
-                        setIsManualPaid(true);
-                      }}
-                      disabled={totalCalculatedCost === 0}
-                    >
-                      100 Rb
-                    </button>
-                  </div>
+                  {/* Tombol Nominal Cepat (Hanya saat Tunai) */}
+                  {paymentMethod === 'TUNAI' && (
+                    <div style={{ display: 'flex', gap: '6px', marginTop: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
+                      <span className="text-xs text-muted" style={{ marginRight: '4px' }}>Nominal Cepat:</span>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => {
+                          setPatientPaid(totalPrescriptionBill);
+                          setIsManualPaid(false);
+                        }}
+                        disabled={totalPrescriptionBill === 0}
+                      >
+                        Uang Pas ({formatRupiah(totalPrescriptionBill)})
+                      </button>
+                      {[20000, 50000, 100000, 200000].map((nominal) => (
+                        <button
+                          key={nominal}
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => {
+                            setPatientPaid(nominal);
+                            setIsManualPaid(true);
+                          }}
+                          disabled={totalPrescriptionBill === 0}
+                        >
+                          {nominal >= 1000 ? `${nominal / 1000} Rb` : formatRupiah(nominal)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="card card-compact" style={{ background: 'var(--slate-50)', marginBottom: 'var(--sp-4)' }}>
@@ -756,7 +1002,7 @@ export default function PrescriptionPage() {
                   style={{ width: '100%', justifyContent: 'center' }}
                   onClick={handleDispensePrescription}
                 >
-                  Eksekusi Pengeluaran &amp; Potong Stok Fisik
+                  Eksekusi Pengeluaran &amp; Pembayaran Resep
                 </button>
               </div>
             )}
@@ -836,126 +1082,251 @@ export default function PrescriptionPage() {
         </div>
       </div>
 
-      {/* MODAL CETAK ETIKET OBAT FARMASI */}
+      {/* MODAL CETAK KWITANSI & ETIKET OBAT FARMASI */}
       {showEtiketModal && completedPrescription && (
         <div className="modal-overlay">
-          <div className="modal-content modal-wide">
-            <div className="modal-header">
-              <h2>Etiket Obat Resep (Label Aturan Pakai)</h2>
+          <div className="modal-content modal-wide" id="printable-prescription-modal" style={{ maxWidth: '780px' }}>
+            <div className="modal-header no-print">
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <h2 style={{ margin: 0 }}>Pelayanan Resep Selesai</h2>
+                <div style={{ display: 'flex', gap: '4px', background: 'var(--slate-100)', padding: '3px', borderRadius: '8px' }}>
+                  <button
+                    type="button"
+                    className={`btn btn-xs ${modalTab === 'KWITANSI' ? 'btn-primary' : 'btn-ghost'}`}
+                    onClick={() => setModalTab('KWITANSI')}
+                    style={{ fontSize: '0.78rem', padding: '3px 10px' }}
+                  >
+                    📄 Kwitansi Pembayaran
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-xs ${modalTab === 'ETIKET' ? 'btn-primary' : 'btn-ghost'}`}
+                    onClick={() => setModalTab('ETIKET')}
+                    style={{ fontSize: '0.78rem', padding: '3px 10px' }}
+                  >
+                    🏷️ Etiket Obat ({completedPrescription.items.length})
+                  </button>
+                </div>
+              </div>
               <button className="modal-close" onClick={() => setShowEtiketModal(false)}>
                 &times;
               </button>
             </div>
+
             <div className="modal-body">
-              <p className="text-sm text-muted">
-                Stok fisik pergudangan telah berhasil dipotong secara otomatis. Berikut adalah label etiket aturan pakai
-                untuk ditempelkan pada kemasan obat:
-              </p>
-
-              {/* Ringkasan Pembayaran Resep */}
-              <div
-                style={{
-                  background: '#f8fafc',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: '6px',
-                  padding: '10px 14px',
-                  margin: '10px 0 16px 0',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  flexWrap: 'wrap',
-                  gap: '8px',
-                  fontSize: '0.875rem',
-                }}
-              >
+              {/* TAB 1: KWITANSI PEMBAYARAN RESEP */}
+              {modalTab === 'KWITANSI' && (
                 <div>
-                  Total Tagihan Resep: <strong>{formatRupiah(completedPrescription.totalCost)}</strong>
-                </div>
-                <div>
-                  Jumlah Dibayar Pasien: <strong style={{ color: 'var(--teal-700)' }}>{formatRupiah(completedPrescription.amountPaid)}</strong>
-                </div>
-                {completedPrescription.changeAmount > 0 && (
-                  <div>
-                    Kembalian: <strong style={{ color: 'var(--green-700)' }}>{formatRupiah(completedPrescription.changeAmount)}</strong>
-                  </div>
-                )}
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 'var(--sp-4)' }}>
-                {completedPrescription.items.map((item, idx) => {
-                  const isLuar = item.labelType === 'LUAR';
-                  return (
-                    <div
-                      key={idx}
-                      style={{
-                        border: isLuar ? '2px solid #2563eb' : '2px solid #334155',
-                        borderRadius: '8px',
-                        padding: '14px',
-                        background: isLuar ? '#eff6ff' : '#ffffff',
-                        boxShadow: '0 2px 6px rgba(0,0,0,0.06)',
-                      }}
-                    >
-                      {/* Header Etiket */}
-                      <div style={{ textAlign: 'center', borderBottom: '1px dashed #64748b', paddingBottom: '6px', marginBottom: '8px' }}>
-                        <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: isLuar ? '#1d4ed8' : '#0f172a' }}>
-                          APOTEK SEHAT SENTOSA
-                        </div>
-                        <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
-                          SIA: 503/Apt/2025 | APA: Apt. Fadhil S.Farm
-                        </div>
+                  <div
+                    style={{
+                      background: '#ffffff',
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '8px',
+                      padding: '20px',
+                      color: '#0f172a',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.04)',
+                    }}
+                  >
+                    {/* Header Faktur Apotek */}
+                    <div style={{ textAlign: 'center', borderBottom: '2px solid #0f766e', paddingBottom: '12px', marginBottom: '16px' }}>
+                      <h2 style={{ margin: '0 0 4px 0', fontSize: '1.25rem', color: '#0f766e', letterSpacing: '0.5px' }}>
+                        APOTEK SEHAT SENTOSA
+                      </h2>
+                      <div style={{ fontSize: '0.8rem', color: '#475569' }}>
+                        SIA: 503/Apt/2025 &bull; APA: Apt. Fadhil S.Farm &bull; Telp: (0411) 889900
                       </div>
-
-                      <div style={{ fontSize: '0.8rem', marginBottom: '6px' }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                          <span>No: <strong>{completedPrescription.recipeNo}</strong></span>
-                          <span>Tgl: {formatDate(completedPrescription.date)}</span>
-                        </div>
-                        <div>
-                          Pasien: <strong>{completedPrescription.patientName}</strong>{' '}
-                          {completedPrescription.patientAge && `(${completedPrescription.patientAge})`}
-                        </div>
-                        <div>Dokter: {completedPrescription.doctorName}</div>
-                        {completedPrescription.diagnosis && (
-                          <div style={{ marginTop: '2px', color: '#0f766e', fontWeight: 600 }}>
-                            Diagnosa: <span>{completedPrescription.diagnosis}</span>
-                          </div>
-                        )}
-                        {completedPrescription.action && (
-                          <div style={{ marginTop: '2px', color: '#1d4ed8', fontWeight: 600 }}>
-                            Tindakan: <span>{completedPrescription.action}</span>
-                          </div>
-                        )}
-                      </div>
-
-                      <div
-                        style={{
-                          background: isLuar ? '#dbeafe' : '#f8fafc',
-                          border: '1px solid #cbd5e1',
-                          borderRadius: '6px',
-                          padding: '8px',
-                          textAlign: 'center',
-                          margin: '8px 0',
-                        }}
-                      >
-                        <div style={{ fontWeight: 'bold', fontSize: '0.95rem' }}>{item.medicine.name}</div>
-                        <div style={{ fontSize: '0.75rem', color: '#475569' }}>
-                          Jumlah: {item.quantity} {item.unit}
-                        </div>
-                        <div style={{ fontWeight: 700, fontSize: '0.9rem', color: isLuar ? '#1e40af' : '#0d9488', marginTop: '4px' }}>
-                          {item.signa}
-                        </div>
-                      </div>
-
-                      <div style={{ textAlign: 'center', fontSize: '0.72rem', fontWeight: 600, color: isLuar ? '#1d4ed8' : '#334155' }}>
-                        {isLuar ? 'OBAT LUAR — TIDAK BOLEH DITELAN' : 'OBAT DALAM — DIMINUM SESUAI ATURAN'}
+                      <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#0f172a', marginTop: '6px' }}>
+                        KWITANSI PEMBAYARAN RESEP DOKTER
                       </div>
                     </div>
-                  );
-                })}
-              </div>
+
+                    {/* Data Resep & Pasien */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '10px', fontSize: '0.85rem', marginBottom: '16px', background: '#f8fafc', padding: '12px', borderRadius: '6px' }}>
+                      <div>
+                        <div>No. Resep: <strong>{completedPrescription.recipeNo}</strong></div>
+                        <div>Tgl/Waktu: <strong>{formatDate(completedPrescription.date)} {new Date(completedPrescription.date).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}</strong></div>
+                        <div>Metode Bayar: <strong className="badge badge-info" style={{ fontSize: '0.75rem', padding: '1px 6px' }}>{completedPrescription.paymentMethod}</strong></div>
+                      </div>
+                      <div>
+                        <div>Pasien: <strong>{completedPrescription.patientName}</strong> {completedPrescription.patientAge && `(${completedPrescription.patientAge})`}</div>
+                        <div>Dokter: <strong>{completedPrescription.doctorName}</strong></div>
+                        {completedPrescription.diagnosis && (
+                          <div style={{ color: '#0f766e' }}>Diagnosa: <strong>{completedPrescription.diagnosis}</strong></div>
+                        )}
+                        {completedPrescription.action && (
+                          <div style={{ color: '#1d4ed8' }}>Tindakan: <strong>{completedPrescription.action}</strong></div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Tabel Item Obat */}
+                    <table className="data-table" style={{ width: '100%', marginBottom: '16px', fontSize: '0.85rem' }}>
+                      <thead>
+                        <tr style={{ background: '#f1f5f9' }}>
+                          <th>Nama Obat &amp; Signa</th>
+                          <th className="text-center">Jumlah</th>
+                          <th className="text-right">Harga Satuan</th>
+                          <th className="text-right">Subtotal</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {completedPrescription.items.map((item, idx) => (
+                          <tr key={idx}>
+                            <td>
+                              <strong>{item.medicine.name}</strong>
+                              <div className="text-xs text-muted">Aturan: {item.signa}</div>
+                            </td>
+                            <td className="text-center">{item.quantity} {item.unit}</td>
+                            <td className="text-right">{formatRupiah(item.unitPrice)}</td>
+                            <td className="text-right" style={{ fontWeight: 700 }}>{formatRupiah(item.subtotal)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td colSpan={3} className="text-right" style={{ fontWeight: 600 }}>Subtotal Biaya Obat:</td>
+                          <td className="text-right" style={{ fontWeight: 700 }}>{formatRupiah(completedPrescription.medicinesCost)}</td>
+                        </tr>
+                        {completedPrescription.prescriptionFee > 0 && (
+                          <tr>
+                            <td colSpan={3} className="text-right" style={{ fontWeight: 600 }}>Biaya Jasa / Embalase Resep:</td>
+                            <td className="text-right" style={{ fontWeight: 700, color: '#0f766e' }}>{formatRupiah(completedPrescription.prescriptionFee)}</td>
+                          </tr>
+                        )}
+                        <tr style={{ background: '#f8fafc', fontSize: '1rem' }}>
+                          <td colSpan={3} className="text-right" style={{ fontWeight: 800, color: '#0f766e' }}>TOTAL TAGIHAN:</td>
+                          <td className="text-right" style={{ fontWeight: 800, color: '#0f766e', fontSize: '1.1rem' }}>{formatRupiah(completedPrescription.totalCost)}</td>
+                        </tr>
+                        <tr>
+                          <td colSpan={3} className="text-right">Jumlah Dibayar Pasien:</td>
+                          <td className="text-right" style={{ fontWeight: 700 }}>{formatRupiah(completedPrescription.amountPaid)}</td>
+                        </tr>
+                        {completedPrescription.changeAmount > 0 && (
+                          <tr>
+                            <td colSpan={3} className="text-right" style={{ color: '#16a34a', fontWeight: 600 }}>Kembalian Pasien:</td>
+                            <td className="text-right" style={{ fontWeight: 700, color: '#16a34a' }}>{formatRupiah(completedPrescription.changeAmount)}</td>
+                          </tr>
+                        )}
+                      </tfoot>
+                    </table>
+
+                    {/* Footer Kwitansi */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: '20px', paddingTop: '12px', borderTop: '1px dashed #cbd5e1', fontSize: '0.8rem' }}>
+                      <div style={{ color: '#64748b' }}>
+                        <div>&bull; Obat yang sudah dibeli tidak dapat ditukar/dikembalikan</div>
+                        <div>&bull; Simpan struk ini sebagai bukti pembayaran yang sah</div>
+                        <div style={{ marginTop: '4px', fontWeight: 600, color: '#0f766e' }}>Semoga Lekas Sembuh &amp; Sehat Selalu</div>
+                      </div>
+                      <div style={{ textAlign: 'center', minWidth: '150px' }}>
+                        <div style={{ marginBottom: '40px' }}>Petugas Farmasi / Kasir,</div>
+                        <div style={{ borderTop: '1px solid #334155', paddingTop: '4px', fontWeight: 700 }}>Apt. Fadhil S.Farm</div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* TAB 2: ETIKET OBAT FARMASI */}
+              {modalTab === 'ETIKET' && (
+                <div>
+                  <p className="text-sm text-muted" style={{ marginBottom: '12px' }}>
+                    Label etiket aturan pakai obat resep untuk ditempelkan pada wadah/kemasan obat:
+                  </p>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 'var(--sp-4)' }}>
+                    {completedPrescription.items.map((item, idx) => {
+                      const isLuar = item.labelType === 'LUAR';
+                      return (
+                        <div
+                          key={idx}
+                          style={{
+                            border: isLuar ? '2px solid #2563eb' : '2px solid #334155',
+                            borderRadius: '8px',
+                            padding: '14px',
+                            background: isLuar ? '#eff6ff' : '#ffffff',
+                            boxShadow: '0 2px 6px rgba(0,0,0,0.06)',
+                          }}
+                        >
+                          {/* Header Etiket */}
+                          <div style={{ textAlign: 'center', borderBottom: '1px dashed #64748b', paddingBottom: '6px', marginBottom: '8px' }}>
+                            <div style={{ fontWeight: 'bold', fontSize: '0.9rem', color: isLuar ? '#1d4ed8' : '#0f172a' }}>
+                              APOTEK SEHAT SENTOSA
+                            </div>
+                            <div style={{ fontSize: '0.72rem', color: '#64748b' }}>
+                              SIA: 503/Apt/2025 | APA: Apt. Fadhil S.Farm
+                            </div>
+                          </div>
+
+                          <div style={{ fontSize: '0.8rem', marginBottom: '6px' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                              <span>No: <strong>{completedPrescription.recipeNo}</strong></span>
+                              <span>Tgl: {formatDate(completedPrescription.date)}</span>
+                            </div>
+                            <div>
+                              Pasien: <strong>{completedPrescription.patientName}</strong>{' '}
+                              {completedPrescription.patientAge && `(${completedPrescription.patientAge})`}
+                            </div>
+                            <div>Dokter: {completedPrescription.doctorName}</div>
+                            {completedPrescription.diagnosis && (
+                              <div style={{ marginTop: '2px', color: '#0f766e', fontWeight: 600 }}>
+                                Diagnosa: <span>{completedPrescription.diagnosis}</span>
+                              </div>
+                            )}
+                            {completedPrescription.action && (
+                              <div style={{ marginTop: '2px', color: '#1d4ed8', fontWeight: 600 }}>
+                                Tindakan: <span>{completedPrescription.action}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          <div
+                            style={{
+                              background: isLuar ? '#dbeafe' : '#f8fafc',
+                              border: '1px solid #cbd5e1',
+                              borderRadius: '6px',
+                              padding: '8px',
+                              textAlign: 'center',
+                              margin: '8px 0',
+                            }}
+                          >
+                            <div style={{ fontWeight: 'bold', fontSize: '0.95rem' }}>{item.medicine.name}</div>
+                            <div style={{ fontSize: '0.75rem', color: '#475569' }}>
+                              Jumlah: {item.quantity} {item.unit}
+                            </div>
+                            <div style={{ fontWeight: 700, fontSize: '0.9rem', color: isLuar ? '#1e40af' : '#0d9488', marginTop: '4px' }}>
+                              {item.signa}
+                            </div>
+                          </div>
+
+                          <div style={{ textAlign: 'center', fontSize: '0.72rem', fontWeight: 600, color: isLuar ? '#1d4ed8' : '#334155' }}>
+                            {isLuar ? 'OBAT LUAR — TIDAK BOLEH DITELAN' : 'OBAT DALAM — DIMINUM SESUAI ATURAN'}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
-            <div className="modal-footer">
-              <button className="btn btn-secondary" onClick={() => window.print()}>
-                Cetak Semua Etiket
+            <div className="modal-footer no-print">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => {
+                  setModalTab('KWITANSI');
+                  setTimeout(() => window.print(), 100);
+                }}
+              >
+                🖨️ Cetak Kwitansi Resep
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => {
+                  setModalTab('ETIKET');
+                  setTimeout(() => window.print(), 100);
+                }}
+              >
+                🏷️ Cetak Etiket
               </button>
               <button className="btn btn-primary" onClick={() => setShowEtiketModal(false)}>
                 Selesai &amp; Tutup
