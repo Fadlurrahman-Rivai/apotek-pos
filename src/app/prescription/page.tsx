@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import {
   getMedicines,
   getTotalStock,
@@ -376,6 +377,16 @@ export default function PrescriptionPage() {
             Alur pengeluaran obat resep dokter dihitung dengan satuan per biji (bukan per strip/box), otomatis memotong stok
             fisik pergudangan berbasis FEFO, dan mencetak etiket obat farmasi.
           </p>
+        </div>
+        <div className="page-header-actions">
+          <Link href="/riwayat-resep" className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M2.5 10a7.5 7.5 0 1 1 2.2 5.3" />
+              <path d="M2.5 15.5v-5.5h5.5" />
+              <polyline points="10 6 10 10 13 12" />
+            </svg>
+            <span>Riwayat &amp; Impor Resep</span>
+          </Link>
         </div>
       </div>
 

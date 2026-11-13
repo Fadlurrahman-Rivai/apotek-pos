@@ -12,6 +12,7 @@ export default function Navbar() {
     { href: '/', label: 'Dashboard' },
     { href: '/pos', label: 'Kasir POS' },
     { href: '/prescription', label: 'Pengeluaran Resep' },
+    { href: '/riwayat-resep', label: 'Riwayat Resep' },
     { href: '/inventory', label: 'Katalog Obat' },
     { href: '/warehouse', label: 'Barang Datang' },
     { href: '/expiry', label: 'Kedaluwarsa' },

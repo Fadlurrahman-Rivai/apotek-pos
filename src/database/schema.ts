@@ -133,3 +133,27 @@ export interface SaleItem {
   unitPrice: number;
   subtotal: number;
 }
+
+export interface PrescriptionRecordItem {
+  medicineName: string;
+  quantity: number;
+  unit: string;
+  signa?: string;
+  labelType?: 'DALAM' | 'LUAR';
+}
+
+export interface PrescriptionRecord {
+  id: string;
+  prescriptionNo: string;
+  patientName: string;
+  patientAge?: string;
+  doctorName?: string;
+  diagnosis?: string;
+  action?: string;
+  examinationFee: number;
+  totalCost?: number;
+  date: string;
+  items: PrescriptionRecordItem[];
+  notes?: string;
+  source?: 'LOCAL' | 'IMPORTED';
+}

@@ -63,6 +63,13 @@ const icons = {
       <line x1="7" y1="12" x2="10" y2="12" />
     </svg>
   ),
+  history: (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2.5 10a7.5 7.5 0 1 1 2.2 5.3" />
+      <path d="M2.5 15.5v-5.5h5.5" />
+      <polyline points="10 6 10 10 13 12" />
+    </svg>
+  ),
   expiry: (
     <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
       <circle cx="10" cy="10" r="7.5" />
@@ -116,6 +123,7 @@ const navItems: NavItem[] = [
   { href: '/gudang', label: 'Gudang', icon: icons.warehouse },
   { href: '/warehouse', label: 'Barang Datang', icon: icons.barangDatang },
   { href: '/prescription', label: 'Pengeluaran Resep', icon: icons.prescription, badge: 'Rx' },
+  { href: '/riwayat-resep', label: 'Riwayat Resep', icon: icons.history },
   { href: '/expiry', label: 'Kedaluwarsa', icon: icons.expiry },
   { href: '/pricing', label: 'Harga & Import', icon: icons.pricing, adminOnly: true },
 ];

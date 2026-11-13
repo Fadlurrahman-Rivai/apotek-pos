@@ -9,6 +9,9 @@ import {
   Sale,
   SaleItem,
   BatchStatus,
+  PrescriptionRecord,
+  PrescriptionRecordItem,
+  MutationType,
 } from './schema';
 import {
   seedMedicines,
@@ -38,6 +41,7 @@ const KEYS = {
   mutations: 'apotek_mutations',
   sales: 'apotek_sales',
   saleItems: 'apotek_sale_items',
+  prescriptions: 'apotek_prescription_records',
   seeded: 'apotek_seeded',
 } as const;
 
@@ -358,6 +362,17 @@ export function addMutation(mutation: StockMutation): void {
   }
 }
 
+export function deleteMutation(id: string): void {
+  const all = getMutations();
+  setStore(KEYS.mutations, all.filter((m) => m.id !== id));
+}
+
+export function deleteMutationsByRef(referenceNumber: string): void {
+  const all = getMutations();
+  const cleanRef = referenceNumber.trim().toLowerCase();
+  setStore(KEYS.mutations, all.filter((m) => (m.referenceNumber || '').trim().toLowerCase() !== cleanRef));
+}
+
 // ── Sales ──
 
 export function getSales(): Sale[] {
@@ -407,6 +422,166 @@ export function completeSale(sale: Sale, items: SaleItem[]): void {
   if (isSupabaseReady()) {
     cloudSaveSale(sale, items);
   }
+}
+
+// ── Prescription Records (Riwayat & Impor Pengeluaran Resep) ──
+
+export function getStoredPrescriptionRecords(): PrescriptionRecord[] {
+  return getStore<PrescriptionRecord>(KEYS.prescriptions);
+}
+
+export function savePrescriptionRecord(record: PrescriptionRecord): void {
+  const all = getStoredPrescriptionRecords();
+  const idx = all.findIndex((r) => r.id === record.id || r.prescriptionNo === record.prescriptionNo);
+  if (idx >= 0) {
+    all[idx] = record;
+  } else {
+    all.unshift(record);
+  }
+  setStore(KEYS.prescriptions, all);
+}
+
+export function getPrescriptionRecords(): PrescriptionRecord[] {
+  const stored = getStoredPrescriptionRecords();
+  const storedRxNos = new Set(stored.map((r) => (r.prescriptionNo || '').toLowerCase().trim()));
+
+  // Ekstrak dari riwayat mutasi PENGELUARAN_RESEP lokal
+  const mutations = getMutations().filter((m) => m.mutationType === MutationType.PENGELUARAN_RESEP);
+  const groupedMutations: Record<string, StockMutation[]> = {};
+
+  for (const m of mutations) {
+    const rxNo = (m.referenceNumber || 'RXP-UNKNOWN').trim();
+    if (!groupedMutations[rxNo]) {
+      groupedMutations[rxNo] = [];
+    }
+    groupedMutations[rxNo].push(m);
+  }
+
+  const extracted: PrescriptionRecord[] = [];
+  const meds = getMedicines();
+  const medMap = new Map(meds.map((med) => [med.id, med.name]));
+
+  for (const [rxNo, mutList] of Object.entries(groupedMutations)) {
+    if (storedRxNos.has(rxNo.toLowerCase())) {
+      continue;
+    }
+
+    const first = mutList[0];
+    const notes = first.notes || '';
+
+    let patientName = 'Pasien Umum';
+    let patientAge = '';
+    let doctorName = '';
+    let examFee = first.paidAmount || 0;
+
+    const pMatch = notes.match(/Pasien:\s*([^|(]+)(?:\(([^)]*)\))?/i);
+    if (pMatch) {
+      patientName = pMatch[1]?.trim() || patientName;
+      patientAge = pMatch[2]?.trim() || '';
+    }
+
+    const dMatch = notes.match(/dr\.\s*([^|]+)/i);
+    if (dMatch) {
+      doctorName = dMatch[1]?.trim() || '';
+    }
+
+    const feeMatch = notes.match(/Biaya Pemeriksaan:\s*Rp\s*([\d.,]+)/i);
+    if (feeMatch && !examFee) {
+      const clean = feeMatch[1].replace(/\D/g, '');
+      if (clean) examFee = parseInt(clean, 10);
+    }
+
+    const items: PrescriptionRecordItem[] = mutList.map((m) => {
+      const medName = medMap.get(m.medicineId) || 'Obat Resep';
+      const unitUsed = m.unitUsed || '';
+      const uParts = unitUsed.split(' ');
+      const qty = Math.abs(parseFloat(uParts[0]) || m.qtyChange || 1);
+      const unit = uParts.slice(1).join(' ') || 'Biji';
+
+      const signaMatch = m.notes.match(/Aturan:\s*([^|]+)/i);
+      const signa = signaMatch ? signaMatch[1].trim() : 'Sesuai petunjuk dokter';
+
+      return {
+        medicineName: medName,
+        quantity: qty,
+        unit,
+        signa,
+        labelType: /sirup|tetes|salep/i.test(unit) ? 'LUAR' : 'DALAM',
+      };
+    });
+
+    extracted.push({
+      id: first.id,
+      prescriptionNo: rxNo,
+      patientName,
+      patientAge,
+      doctorName: doctorName ? `dr. ${doctorName}` : 'dr. Praktek Umum',
+      diagnosis: first.diagnosis || '',
+      action: first.action || '',
+      examinationFee: examFee,
+      totalCost: examFee,
+      date: first.createdAt || new Date().toISOString(),
+      items,
+      notes,
+      source: 'LOCAL',
+    });
+  }
+
+  const combined = [...stored, ...extracted].sort((a, b) => {
+    return new Date(b.date).getTime() - new Date(a.date).getTime();
+  });
+
+  return combined;
+}
+
+export function importPrescriptionRecords(
+  records: PrescriptionRecord[],
+  syncToMutations: boolean = true
+): void {
+  const current = getStoredPrescriptionRecords();
+  const currentRxMap = new Map(current.map((r) => [(r.prescriptionNo || '').toLowerCase().trim(), r]));
+
+  records.forEach((rec) => {
+    currentRxMap.set((rec.prescriptionNo || '').toLowerCase().trim(), rec);
+
+    if (syncToMutations) {
+      const existingMutations = getMutations();
+      const exists = existingMutations.some(
+        (m) => (m.referenceNumber || '').toLowerCase().trim() === (rec.prescriptionNo || '').toLowerCase().trim()
+      );
+      if (!exists && rec.items && rec.items.length > 0) {
+        rec.items.forEach((item, idx) => {
+          addMutation({
+            id: `mut-imp-${Date.now().toString(36)}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
+            medicineId: 'IMP-MED',
+            batchId: null,
+            mutationType: MutationType.PENGELUARAN_RESEP,
+            qtyChange: -Math.abs(item.quantity || 1),
+            unitUsed: `${item.quantity} ${item.unit || 'Biji'}`,
+            referenceNumber: rec.prescriptionNo,
+            notes: `Pasien: ${rec.patientName} (${rec.patientAge || '-'}) | ${rec.doctorName || '-'} | Diagnosa: ${rec.diagnosis || '-'} | Tindakan: ${rec.action || '-'} | Biaya Pemeriksaan: Rp ${rec.examinationFee || 0} | Aturan: ${item.signa || '-'} | [Impor Riwayat]`,
+            diagnosis: rec.diagnosis,
+            action: rec.action,
+            paidAmount: rec.examinationFee,
+            createdAt: rec.date || new Date().toISOString(),
+          });
+        });
+      }
+    }
+  });
+
+  setStore(KEYS.prescriptions, Array.from(currentRxMap.values()));
+}
+
+export function deletePrescriptionRecord(idOrRxNo: string): void {
+  const stored = getStoredPrescriptionRecords();
+  const clean = idOrRxNo.toLowerCase().trim();
+  const filtered = stored.filter(
+    (r) => r.id.toLowerCase().trim() !== clean && (r.prescriptionNo || '').toLowerCase().trim() !== clean
+  );
+  setStore(KEYS.prescriptions, filtered);
+
+  deleteMutationsByRef(idOrRxNo);
 }
 
 /**
