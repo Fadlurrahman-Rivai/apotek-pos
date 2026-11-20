@@ -545,35 +545,8 @@ export default function InventoryPage() {
                           }
                         />
                       </div>
-                      <div className="form-group">
-                        <label className="form-label">Harga Jual per Butir / Tablet (Rp)</label>
-                        <input
-                          type="number"
-                          className="form-input"
-                          placeholder="700"
-                          value={formData.sellPriceBase || ''}
-                          onChange={(e) =>
-                            setFormData({
-                              ...formData,
-                              sellPriceBase: parseFloat(e.target.value) || null,
-                            })
-                          }
-                        />
-                      </div>
                     </div>
                   )}
-
-                  <div className="form-group" style={{ marginTop: 'var(--sp-3)' }}>
-                    <label className="form-label">Safety Stock / Batas Minimum (Satuan Dasar) *</label>
-                    <input
-                      type="number"
-                      className="form-input"
-                      placeholder="50"
-                      value={formData.minStock || ''}
-                      onChange={(e) => setFormData({ ...formData, minStock: parseInt(e.target.value) || 0 })}
-                      required
-                    />
-                  </div>
                 </div>
               </div>
 
