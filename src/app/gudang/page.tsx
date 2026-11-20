@@ -7,7 +7,8 @@ import { generateId, formatRupiah } from '@/lib/formatters';
 import { initDB, addMedicine, addBatch, addMutation, getMedicines, clearAllData } from '@/database/db';
 import { Medicine, StockBatch, MedicineCategory, BatchStatus, MutationType } from '@/database/schema';
 import DatabaseConfigModal from '@/components/common/DatabaseConfigModal';
-import { isSupabaseReady, cloudFetchWarehouse, cloudSaveWarehouse } from '@/lib/supabase';
+import { isSupabaseReady, cloudFetchWarehouse } from '@/lib/supabase';
+import { enqueue, outboxStamp, canOverwriteLocal } from '@/lib/outbox';
 import { useAuth } from '@/context/AuthContext';
 
 // Data bawaan awal gudang (default sample)
@@ -154,8 +155,9 @@ export default function GudangPage() {
 
       // Jika Supabase terhubung, ambil data terbaru dari cloud database
       if (isSupabaseReady()) {
+        const stamp = outboxStamp();
         cloudFetchWarehouse().then((cloudData) => {
-          if (cloudData && cloudData.rows) {
+          if (cloudData && cloudData.rows && canOverwriteLocal(stamp)) {
             setRows(cloudData.rows);
             if (cloudData.allColumns.length > 0) setAllColumns(cloudData.allColumns);
             if (cloudData.selectedColumns.length > 0) setSelectedColumns(cloudData.selectedColumns);
@@ -204,9 +206,7 @@ export default function GudangPage() {
     setFileName(name);
     setLastImportedTime(now);
 
-    if (isSupabaseReady()) {
-      cloudSaveWarehouse(rowsWithId, allCols, selCols, name);
-    }
+    enqueue({ kind: 'warehouseSave', rows: rowsWithId, allCols, selCols, name });
   };
 
   // Toggle pilihan kolom yang tampil di halaman gudang

@@ -99,14 +99,21 @@ export function generateId(): string {
 }
 
 /**
- * Generate invoice number like "INV-20260907-001"
+ * Nomor berurutan harian, mis. generateDailyNumber('INV', …) → "INV-20260907-001".
+ * Seq = max seq yang sudah ada dengan prefix & tanggal sama, + 1 (bukan jumlah total),
+ * sehingga tidak bentrok saat data dihapus atau hari berganti.
  */
-export function generateInvoiceNumber(salesCount: number): string {
-  const d = new Date();
+export function generateDailyNumber(prefix: string, existing: string[], date: Date = new Date()): string {
   const dateStr =
-    d.getFullYear().toString() +
-    String(d.getMonth() + 1).padStart(2, '0') +
-    String(d.getDate()).padStart(2, '0');
-  const seq = String(salesCount + 1).padStart(3, '0');
-  return `INV-${dateStr}-${seq}`;
+    date.getFullYear().toString() +
+    String(date.getMonth() + 1).padStart(2, '0') +
+    String(date.getDate()).padStart(2, '0');
+  const head = `${prefix}-${dateStr}-`;
+  let max = 0;
+  for (const ref of existing) {
+    if (!ref || !ref.startsWith(head)) continue;
+    const n = parseInt(ref.slice(head.length), 10);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return head + String(max + 1).padStart(3, '0');
 }

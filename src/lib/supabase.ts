@@ -299,7 +299,7 @@ export async function cloudAddMutation(m: StockMutation): Promise<boolean> {
       created_at: m.createdAt,
     };
 
-    const { error } = await sb.from('stock_mutations').insert(payload);
+    const { error } = await sb.from('stock_mutations').upsert(payload, { onConflict: 'id' });
     if (error) throw error;
     return true;
   } catch (err) {
@@ -375,7 +375,7 @@ export async function cloudSaveSale(sale: Sale, items: SaleItem[]): Promise<bool
       created_at: sale.createdAt,
     };
 
-    const { error: saleErr } = await sb.from('sales').insert(salePayload);
+    const { error: saleErr } = await sb.from('sales').upsert(salePayload, { onConflict: 'id' });
     if (saleErr) throw saleErr;
 
     if (items.length > 0) {
@@ -391,7 +391,7 @@ export async function cloudSaveSale(sale: Sale, items: SaleItem[]): Promise<bool
         subtotal: it.subtotal,
       }));
 
-      const { error: itemsErr } = await sb.from('sale_items').insert(itemsPayload);
+      const { error: itemsErr } = await sb.from('sale_items').upsert(itemsPayload, { onConflict: 'id' });
       if (itemsErr) throw itemsErr;
     }
 

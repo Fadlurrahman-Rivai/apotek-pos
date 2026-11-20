@@ -5,12 +5,12 @@ import Link from 'next/link';
 import {
   getMedicines,
   getTotalStock,
-  deductStockFEFO,
-  addMutation,
   getMutations,
+  getPrescriptionRecords,
+  commitSale,
   initDB,
-  completeSale,
 } from '@/database/db';
+import type { StockLine } from '@/database/db';
 import {
   Medicine,
   StockMutation,
@@ -20,7 +20,7 @@ import {
   SaleUnit,
 } from '@/database/schema';
 import { toBaseUnit, getPrescriptionUnits } from '@/features/inventory/utils/conversion';
-import { formatDate, generateId, formatRupiah, formatNumberDots, parseNumberDots } from '@/lib/formatters';
+import { formatDate, generateId, formatRupiah, formatNumberDots, parseNumberDots, generateDailyNumber } from '@/lib/formatters';
 
 interface PrescriptionItem {
   id: string;
@@ -231,8 +231,7 @@ export default function PrescriptionPage() {
       return;
     }
 
-    const rxNo = prescriptionNo.trim() || `RXP-${Date.now().toString().slice(-6)}`;
-    const deductionLogs: string[] = [];
+    const rxNo = prescriptionNo.trim() || generateDailyNumber('RXP', getPrescriptionRecords().map((r) => r.prescriptionNo));
 
     const diagText = diagnosis.trim();
     const actText = action.trim();
@@ -241,49 +240,16 @@ export default function PrescriptionPage() {
 
     const effectivePaid = paymentMethod !== 'TUNAI' ? examinationFee : (patientPaid > 0 ? patientPaid : examinationFee);
 
-    // 1. Eksekusi pemotongan stok untuk setiap obat dalam resep (FEFO)
-    for (const item of prescriptionItems) {
-      const deductions = deductStockFEFO(item.medicine.id, item.baseQtyToDeduct);
-
-      if (!deductions) {
-        showNotification(
-          'error',
-          `Gagal memotong stok ${item.medicine.name}. Stok fisik mungkin sudah berubah.`
-        );
-        refreshData();
-        return;
-      }
-
-      const batchInfo = deductions.map((d) => `Batch ${d.batchNumber} (-${d.deductedQty})`).join(', ');
-
-      // Catat mutasi pengeluaran resep terpadu
-      addMutation({
-        id: generateId(),
-        medicineId: item.medicine.id,
-        batchId: deductions[0].batchId,
-        mutationType: MutationType.PENGELUARAN_RESEP,
-        qtyChange: -item.baseQtyToDeduct,
-        unitUsed: `${item.quantity} ${item.unit}`,
-        referenceNumber: rxNo,
-        notes: `Pasien: ${patientName} (${patientAge || '-'}) | dr. ${doctorName || '-'}${diagPart}${actPart} | Biaya Pemeriksaan: ${formatRupiah(examinationFee)} | Aturan: ${item.signa} | ${batchInfo}`,
-        diagnosis: diagText || undefined,
-        action: actText || undefined,
-        paidAmount: examinationFee,
-        createdAt: new Date().toISOString(),
-      });
-
-      deductionLogs.push(`${item.medicine.name}: -${item.baseQtyToDeduct} ${item.medicine.baseUnit}`);
-    }
-
-    // 2. Simpan Transaksi Penjualan Resmi (completeSale)
+    // Potong stok FEFO semua obat dan simpan resep secara atomik: bila salah satu kurang, tidak ada yang dipotong
     const saleId = generateId();
+    const dispensedAt = new Date().toISOString();
     const newSale: Sale = {
       id: saleId,
       invoiceNumber: rxNo,
       totalAmount: examinationFee,
       amountPaid: effectivePaid,
       changeAmount: Math.max(0, effectivePaid - examinationFee),
-      createdAt: new Date().toISOString(),
+      createdAt: dispensedAt,
     };
 
     const saleItemsToSave: SaleItem[] = [
@@ -298,7 +264,11 @@ export default function PrescriptionPage() {
         unitPrice: examinationFee,
         subtotal: examinationFee,
       },
-      ...prescriptionItems.map((item) => ({
+    ];
+    const stockLines: StockLine[] = [];
+
+    for (const item of prescriptionItems) {
+      const saleItem: SaleItem = {
         id: generateId(),
         saleId,
         medicineId: item.medicine.id,
@@ -308,10 +278,33 @@ export default function PrescriptionPage() {
         quantity: item.quantity,
         unitPrice: 0,
         subtotal: 0,
-      })),
-    ];
+      };
+      saleItemsToSave.push(saleItem);
+      stockLines.push({
+        itemId: saleItem.id,
+        medicineId: item.medicine.id,
+        baseQty: item.baseQtyToDeduct,
+        mutation: {
+          medicineId: item.medicine.id,
+          mutationType: MutationType.PENGELUARAN_RESEP,
+          unitUsed: `${item.quantity} ${item.unit}`,
+          referenceNumber: rxNo,
+          notes: `Pasien: ${patientName} (${patientAge || '-'}) | dr. ${doctorName || '-'}${diagPart}${actPart} | Biaya Pemeriksaan: ${formatRupiah(examinationFee)} | Aturan: ${item.signa}`,
+          diagnosis: diagText || undefined,
+          action: actText || undefined,
+          paidAmount: examinationFee,
+          createdAt: new Date().toISOString(),
+        },
+      });
+    }
 
-    completeSale(newSale, saleItemsToSave);
+    const result = commitSale(newSale, saleItemsToSave, stockLines);
+    if (!result.ok) {
+      const name = prescriptionItems.find((i) => i.medicine.id === result.medicineId)?.medicine.name ?? 'Obat';
+      showNotification('error', `Stok ${name} tidak mencukupi. Resep tidak diproses dan tidak ada stok yang dipotong.`);
+      refreshData();
+      return;
+    }
 
     // 3. Set data etiket & kwitansi pembayaran resep
     setCompletedPrescription({

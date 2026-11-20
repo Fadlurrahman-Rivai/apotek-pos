@@ -20,21 +20,16 @@ import {
   seedSales,
   seedSaleItems,
 } from './seed';
-import { daysUntilExpiry } from '@/lib/formatters';
+import { daysUntilExpiry, generateId } from '@/lib/formatters';
 import {
   cloudFetchMedicines,
-  cloudUpsertMedicine,
-  cloudDeleteMedicine,
   cloudFetchBatches,
-  cloudUpsertBatch,
-  cloudDeleteBatches,
   cloudFetchMutations,
-  cloudAddMutation,
   cloudFetchSales,
   cloudFetchSaleItems,
-  cloudSaveSale,
   isSupabaseReady,
 } from '@/lib/supabase';
+import { enqueue, flushOutbox, hasPendingSync, outboxStamp, canOverwriteLocal } from '@/lib/outbox';
 
 const KEYS = {
   medicines: 'apotek_medicines',
@@ -74,9 +69,17 @@ export function clearAllData(): void {
 
 // ── Cloud Synchronization ──
 
+/**
+ * Tarik data cloud dan timpa cache lokal. Dilewati bila masih ada tulis yang belum terkirim,
+ * atau ada tulis lokal selama fetch (data lokal lebih baru dan tidak boleh tertimpa).
+ */
 export async function syncFromCloud(): Promise<boolean> {
   if (typeof window === 'undefined') return false;
   if (!isSupabaseReady()) return false;
+
+  await flushOutbox();
+  if (hasPendingSync()) return false;
+  const stamp = outboxStamp();
 
   try {
     const [cloudMeds, cloudBatches, cloudMutations, cloudSales, cloudItems] = await Promise.all([
@@ -86,6 +89,8 @@ export async function syncFromCloud(): Promise<boolean> {
       cloudFetchSales(),
       cloudFetchSaleItems(),
     ]);
+
+    if (!canOverwriteLocal(stamp)) return false;
 
     let changed = false;
 
@@ -174,10 +179,7 @@ export function addMedicine(med: Medicine): void {
   const all = getMedicines();
   all.push(med);
   setStore(KEYS.medicines, all);
-
-  if (isSupabaseReady()) {
-    cloudUpsertMedicine(med);
-  }
+  enqueue({ kind: 'medicineUpsert', data: med });
 }
 
 export function updateMedicine(id: string, updates: Partial<Medicine>): void {
@@ -186,10 +188,7 @@ export function updateMedicine(id: string, updates: Partial<Medicine>): void {
   if (idx === -1) return;
   all[idx] = { ...all[idx], ...updates, updatedAt: new Date().toISOString() };
   setStore(KEYS.medicines, all);
-
-  if (isSupabaseReady()) {
-    cloudUpsertMedicine(all[idx]);
-  }
+  enqueue({ kind: 'medicineUpsert', data: all[idx] });
 }
 
 export function deleteMedicine(id: string): void {
@@ -197,10 +196,7 @@ export function deleteMedicine(id: string): void {
     KEYS.medicines,
     getMedicines().filter((m) => m.id !== id)
   );
-
-  if (isSupabaseReady()) {
-    cloudDeleteMedicine(id);
-  }
+  enqueue({ kind: 'medicineDelete', id });
 }
 
 // ── StockBatches ──
@@ -217,10 +213,7 @@ export function addBatch(batch: StockBatch): void {
   const all = getBatches();
   all.push(batch);
   setStore(KEYS.batches, all);
-
-  if (isSupabaseReady()) {
-    cloudUpsertBatch(batch);
-  }
+  enqueue({ kind: 'batchUpsert', data: batch });
 }
 
 export function updateBatch(id: string, updates: Partial<StockBatch>): void {
@@ -229,10 +222,7 @@ export function updateBatch(id: string, updates: Partial<StockBatch>): void {
   if (idx === -1) return;
   all[idx] = { ...all[idx], ...updates };
   setStore(KEYS.batches, all);
-
-  if (isSupabaseReady()) {
-    cloudUpsertBatch(all[idx]);
-  }
+  enqueue({ kind: 'batchUpsert', data: all[idx] });
 }
 
 export function deleteBatchesByMedicine(medicineId: string): void {
@@ -242,15 +232,29 @@ export function deleteBatchesByMedicine(medicineId: string): void {
     KEYS.batches,
     all.filter((b) => b.medicineId !== medicineId)
   );
+  if (targetIds.length > 0) enqueue({ kind: 'batchDelete', ids: targetIds });
+}
 
-  if (isSupabaseReady() && targetIds.length > 0) {
-    cloudDeleteBatches(targetIds);
-  }
+/** Batch yang boleh dijual: stok > 0, belum kedaluwarsa, dan tidak RETURNED. */
+function isSellable(b: StockBatch): boolean {
+  return (
+    b.totalBaseQty > 0 &&
+    b.status !== BatchStatus.EXPIRED &&
+    b.status !== BatchStatus.RETURNED &&
+    daysUntilExpiry(b.expiryDate) > 0
+  );
+}
+
+/** Batch sellable milik satu obat, urut FEFO (kedaluwarsa paling awal dulu). */
+function sellableBatchesFEFO(batches: StockBatch[], medicineId: string): StockBatch[] {
+  return batches
+    .filter((b) => b.medicineId === medicineId && isSellable(b))
+    .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
 }
 
 /**
- * Reduce stock from a specific batch
- * Returns false if insufficient stock
+ * Reduce stock from a specific batch (koreksi rusak/pecah).
+ * Returns false if insufficient stock.
  */
 export function reduceStock(batchId: string, baseQty: number): boolean {
   const all = getBatches();
@@ -259,101 +263,41 @@ export function reduceStock(batchId: string, baseQty: number): boolean {
   if (all[idx].totalBaseQty < baseQty) return false;
   all[idx].totalBaseQty -= baseQty;
   setStore(KEYS.batches, all);
-
-  if (isSupabaseReady()) {
-    cloudUpsertBatch(all[idx]);
-  }
-
+  enqueue({ kind: 'batchUpsert', data: all[idx] });
   return true;
 }
 
+/** Total stok sellable obat: satu-satunya sumber untuk kasir, resep, dan dashboard. */
+export function getTotalStock(medicineId: string): number {
+  return sellableBatchesFEFO(getBatches(), medicineId).reduce((sum, b) => sum + b.totalBaseQty, 0);
+}
+
+/** Batch FEFO berikutnya untuk dijual. */
+export function getBestBatchForSale(medicineId: string): StockBatch | null {
+  return sellableBatchesFEFO(getBatches(), medicineId)[0] ?? null;
+}
+
+const QTY_EPSILON = 1e-9;
+
 /**
- * Deduct stock across active batches using FEFO order.
- * Can deduct across multiple batches if necessary.
- * Returns array of deduction details or null if insufficient total stock.
+ * Alokasikan qty ke batch FEFO. MEMUTASI `batches` in-place: hanya pakai hasil getBatches().
+ * Mengembalikan null bila stok sellable tidak cukup.
  */
-export function deductStockFEFO(
+function allocateFEFO(
+  batches: StockBatch[],
   medicineId: string,
   baseQty: number
-): { batchId: string; batchNumber: string; deductedQty: number }[] | null {
-  const totalAvailable = getTotalStock(medicineId);
-  if (totalAvailable < baseQty) return null;
-
-  const all = getBatches();
-  const activeBatches = all
-    .filter(
-      (b) =>
-        b.medicineId === medicineId &&
-        b.status !== BatchStatus.EXPIRED &&
-        b.status !== BatchStatus.RETURNED &&
-        b.totalBaseQty > 0 &&
-        daysUntilExpiry(b.expiryDate) > 0
-    )
-    .sort(
-      (a, b) =>
-        new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime()
-    );
-
+): { batch: StockBatch; deductedQty: number }[] | null {
   let remaining = baseQty;
-  const deductions: { batchId: string; batchNumber: string; deductedQty: number }[] = [];
-
-  for (const batch of activeBatches) {
-    if (remaining <= 0) break;
-    const toTake = Math.min(batch.totalBaseQty, remaining);
-    batch.totalBaseQty -= toTake;
-    remaining -= toTake;
-    deductions.push({
-      batchId: batch.id,
-      batchNumber: batch.batchNumber,
-      deductedQty: toTake,
-    });
+  const out: { batch: StockBatch; deductedQty: number }[] = [];
+  for (const batch of sellableBatchesFEFO(batches, medicineId)) {
+    if (remaining <= QTY_EPSILON) break;
+    const take = Math.min(batch.totalBaseQty, remaining);
+    batch.totalBaseQty -= take;
+    remaining -= take;
+    out.push({ batch, deductedQty: take });
   }
-
-  if (remaining > 0) return null;
-
-  setStore(KEYS.batches, all);
-
-  if (isSupabaseReady()) {
-    deductions.forEach((d) => {
-      const updated = all.find((b) => b.id === d.batchId);
-      if (updated) cloudUpsertBatch(updated);
-    });
-  }
-
-  return deductions;
-}
-
-/**
- * Get total stock for a medicine across all active (non-expired, non-returned) batches
- */
-export function getTotalStock(medicineId: string): number {
-  return getBatches()
-    .filter(
-      (b) =>
-        b.medicineId === medicineId &&
-        b.status !== BatchStatus.EXPIRED &&
-        b.status !== BatchStatus.RETURNED
-    )
-    .reduce((sum, b) => sum + b.totalBaseQty, 0);
-}
-
-/**
- * Get the best batch to sell from (FEFO: First Expired, First Out)
- * Only returns active batches that are not expired
- */
-export function getBestBatchForSale(medicineId: string): StockBatch | null {
-  const active = getBatches()
-    .filter(
-      (b) =>
-        b.medicineId === medicineId &&
-        b.totalBaseQty > 0 &&
-        daysUntilExpiry(b.expiryDate) > 0
-    )
-    .sort(
-      (a, b) =>
-        new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime()
-    );
-  return active[0] ?? null;
+  return remaining > QTY_EPSILON ? null : out;
 }
 
 // ── StockMutations ──
@@ -370,10 +314,7 @@ export function addMutation(mutation: StockMutation): void {
   const all = getMutations();
   all.push(mutation);
   setStore(KEYS.mutations, all);
-
-  if (isSupabaseReady()) {
-    cloudAddMutation(mutation);
-  }
+  enqueue({ kind: 'mutationAdd', data: mutation });
 }
 
 export function deleteMutation(id: string): void {
@@ -398,12 +339,6 @@ export function getTodaySales(): Sale[] {
   return getSales().filter((s) => s.createdAt.startsWith(todayStr));
 }
 
-export function addSale(sale: Sale): void {
-  const all = getSales();
-  all.push(sale);
-  setStore(KEYS.sales, all);
-}
-
 // ── Sale Items ──
 
 export function getSaleItems(): SaleItem[] {
@@ -414,28 +349,66 @@ export function getSaleItemsBySale(saleId: string): SaleItem[] {
   return getSaleItems().filter((si) => si.saleId === saleId);
 }
 
-export function addSaleItem(item: SaleItem): void {
-  const all = getSaleItems();
-  all.push(item);
-  setStore(KEYS.saleItems, all);
-}
-
-export function addSaleItems(items: SaleItem[]): void {
-  const all = getSaleItems();
-  all.push(...items);
-  setStore(KEYS.saleItems, all);
+/** Satu baris stok keluar; dipecah per batch oleh allocateFEFO. */
+export interface StockLine {
+  /** SaleItem.id yang diisi batchId dari batch FEFO pertama */
+  itemId: string;
+  medicineId: string;
+  /** Qty dalam satuan dasar */
+  baseQty: number;
+  /** Field mutasi bersama; id, batchId, qtyChange dibuat per batch */
+  mutation: Omit<StockMutation, 'id' | 'batchId' | 'qtyChange'>;
 }
 
 /**
- * Selesaikan transaksi penjualan dan sinkronkan struk & item ke cloud
+ * Simpan transaksi (penjualan kasir / pengeluaran resep) semua-atau-tidak-sama-sekali.
+ * Alokasi FEFO dihitung pada salinan in-memory; bila ada baris yang kurang stok,
+ * tidak ada yang ditulis. Bila lolos: batch, mutasi (satu per batch), sale & sale items
+ * ditulis lokal lalu diantrikan ke cloud.
  */
-export function completeSale(sale: Sale, items: SaleItem[]): void {
-  addSale(sale);
-  addSaleItems(items);
+export function commitSale(
+  sale: Sale,
+  items: SaleItem[],
+  stockLines: StockLine[]
+): { ok: true } | { ok: false; medicineId: string } {
+  const batches = getBatches();
+  const touched = new Set<StockBatch>();
+  const newMutations: StockMutation[] = [];
+  const firstBatchByItem = new Map<string, string>();
 
-  if (isSupabaseReady()) {
-    cloudSaveSale(sale, items);
+  for (const line of stockLines) {
+    const allocations = allocateFEFO(batches, line.medicineId, line.baseQty);
+    if (!allocations) return { ok: false, medicineId: line.medicineId };
+
+    for (const { batch, deductedQty } of allocations) {
+      touched.add(batch);
+      if (!firstBatchByItem.has(line.itemId)) firstBatchByItem.set(line.itemId, batch.id);
+      newMutations.push({
+        ...line.mutation,
+        id: generateId(),
+        batchId: batch.id,
+        qtyChange: -deductedQty,
+        notes: `${line.mutation.notes} | Batch ${batch.batchNumber} (-${deductedQty})`,
+      });
+    }
   }
+
+  const savedItems = items.map((it) => {
+    const batchId = firstBatchByItem.get(it.id);
+    return batchId ? { ...it, batchId } : it;
+  });
+
+  setStore(KEYS.batches, batches);
+  for (const b of touched) enqueue({ kind: 'batchUpsert', data: b });
+
+  setStore(KEYS.mutations, [...getMutations(), ...newMutations]);
+  for (const m of newMutations) enqueue({ kind: 'mutationAdd', data: m });
+
+  setStore(KEYS.sales, [...getSales(), sale]);
+  setStore(KEYS.saleItems, [...getSaleItems(), ...savedItems]);
+  enqueue({ kind: 'saleSave', sale, items: savedItems });
+
+  return { ok: true };
 }
 
 // ── Prescription Records (Riwayat & Impor Pengeluaran Resep) ──
@@ -505,7 +478,13 @@ export function getPrescriptionRecords(): PrescriptionRecord[] {
       if (clean) examFee = parseInt(clean, 10);
     }
 
-    const items: PrescriptionRecordItem[] = mutList.map((m) => {
+    // Satu baris resep = satu obat. Mutasi per batch (batchId ada) digabung; impor/legacy (batchId null) tetap per mutasi.
+    const lineHeads = new Map<string, StockMutation>();
+    for (const m of mutList) {
+      const key = m.batchId ? `${m.medicineId}|${m.createdAt}|${m.unitUsed}` : `id:${m.id}`;
+      if (!lineHeads.has(key)) lineHeads.set(key, m);
+    }
+    const items: PrescriptionRecordItem[] = Array.from(lineHeads.values()).map((m) => {
       const medName = medMap.get(m.medicineId) || 'Obat Resep';
       const unitUsed = m.unitUsed || '';
       const uParts = unitUsed.split(' ');

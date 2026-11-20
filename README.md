@@ -67,7 +67,7 @@ Aplikasi telah dilengkapi dengan akun bawaan yang siap digunakan:
 - **UI Library**: [React 19](https://react.dev/)
 - **Bahasa**: [TypeScript 5](https://www.typescriptlang.org/)
 - **Parser Spreadsheet**: [SheetJS (xlsx)](https://docs.sheetjs.com/)
-- **Penyimpanan**: Browser `localStorage` dengan inisialisasi awal otomatis (*auto-seeding*) dan migrasi skema otomatis.
+- **Penyimpanan**: Supabase (cloud) adalah sumber kebenaran bila terkonfigurasi. Browser `localStorage` berfungsi sebagai cache dan antrean tulis (outbox) yang dikirim ulang bila gagal. Inisialisasi awal otomatis (*auto-seeding*) dan migrasi skema otomatis.
 
 ---
 
@@ -102,7 +102,6 @@ Buka browser Anda dan akses:
 Apotek/
 ├── src/
 │   ├── app/                        # Next.js App Router Pages
-│   │   ├── api/                    # Route handlers API internal
 │   │   ├── expiry/                 # Halaman Monitoring Kedaluwarsa
 │   │   ├── gudang/                 # Halaman Manajemen Gudang & Impor Excel Kolom Dinamis
 │   │   ├── inventory/              # Halaman Katalog Obat
@@ -130,8 +129,9 @@ Apotek/
 │   │       └── conversion.ts       # Kalkulasi konversi satuan bertingkat (Box/Strip/Biji)
 │   └── lib/
 │       ├── formatters.ts           # Format mata uang Rupiah, tanggal, pemisah titik nominal
+│       ├── outbox.ts               # Antrean tulis cloud yang belum terkirim
 │       ├── print-escpos.ts         # Utilitas cetak struk thermal
-│       └── server-store.ts         # Penyimpanan cadangan server
+│       └── supabase.ts             # Klien Supabase & operasi cloud
 ├── package.json
 └── README.md
 ```

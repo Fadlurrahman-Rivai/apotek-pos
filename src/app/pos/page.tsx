@@ -5,15 +5,11 @@ import {
   getMedicines,
   getTotalStock,
   getBestBatchForSale,
-  deductStockFEFO,
-  reduceStock,
-  addSale,
-  addSaleItems,
-  addMutation,
+  commitSale,
   getSales,
-  completeSale,
   initDB,
 } from '@/database/db';
+import type { StockLine } from '@/database/db';
 import {
   Medicine,
   MedicineCategory,
@@ -31,7 +27,7 @@ import {
   formatRupiah,
   formatDate,
   generateId,
-  generateInvoiceNumber,
+  generateDailyNumber,
   daysUntilExpiry,
   formatNumberDots,
 } from '@/lib/formatters';
@@ -316,54 +312,53 @@ export default function PosPage() {
       return;
     }
 
-    const salesList = getSales();
-    const invoiceNumber = generateInvoiceNumber(salesList.length);
+    const invoiceNumber = generateDailyNumber('INV', getSales().map((s) => s.invoiceNumber));
     const saleId = generateId();
+    const createdAt = new Date().toISOString();
 
-    // 1. Simpan Transaksi Penjualan
     const newSale: Sale = {
       id: saleId,
       invoiceNumber,
       totalAmount,
       amountPaid,
       changeAmount,
-      createdAt: new Date().toISOString(),
+      createdAt,
     };
 
-    // 2. Simpan Detail Item & Potong Stok Menggunakan FEFO
-    const saleItemsToSave: SaleItem[] = [];
+    const saleItemsToSave: SaleItem[] = cart.map((item) => ({
+      id: generateId(),
+      saleId,
+      medicineId: item.medicine.id,
+      batchId: null,
+      medicineName: item.medicine.name,
+      unit: item.unit as SaleUnit,
+      quantity: item.quantity,
+      unitPrice: item.unitPrice,
+      subtotal: item.subtotal,
+    }));
 
-    for (const item of cart) {
-      const baseQtyToDeduct = toBaseUnit(item.quantity, item.unit, item.medicine);
-      const deductions = deductStockFEFO(item.medicine.id, baseQtyToDeduct);
-
-      // Catat mutasi kasir
-      addMutation({
-        id: generateId(),
+    // Stok dipotong FEFO dan disimpan atomik: bila satu baris kurang, tidak ada yang berubah
+    const stockLines: StockLine[] = cart.map((item, i) => ({
+      itemId: saleItemsToSave[i].id,
+      medicineId: item.medicine.id,
+      baseQty: toBaseUnit(item.quantity, item.unit, item.medicine),
+      mutation: {
         medicineId: item.medicine.id,
-        batchId: deductions && deductions[0] ? deductions[0].batchId : null,
         mutationType: MutationType.PENJUALAN_KASIR,
-        qtyChange: -baseQtyToDeduct,
         unitUsed: `${item.quantity} ${item.unit}`,
         referenceNumber: invoiceNumber,
         notes: `Penjualan Kasir - Faktur ${invoiceNumber}`,
-        createdAt: new Date().toISOString(),
-      });
+        createdAt,
+      },
+    }));
 
-      saleItemsToSave.push({
-        id: generateId(),
-        saleId,
-        medicineId: item.medicine.id,
-        batchId: deductions && deductions[0] ? deductions[0].batchId : null,
-        medicineName: item.medicine.name,
-        unit: item.unit as SaleUnit,
-        quantity: item.quantity,
-        unitPrice: item.unitPrice,
-        subtotal: item.subtotal,
-      });
+    const result = commitSale(newSale, saleItemsToSave, stockLines);
+    if (!result.ok) {
+      const name = cart.find((c) => c.medicine.id === result.medicineId)?.medicine.name ?? 'Obat';
+      showNotification('error', `Stok ${name} tidak mencukupi saat pembayaran. Transaksi dibatalkan, keranjang dipertahankan.`);
+      refreshData();
+      return;
     }
-
-    completeSale(newSale, saleItemsToSave);
 
     // Set struk
     setCompletedSale({
