@@ -39,9 +39,8 @@ export default function WarehousePage() {
     batchNumber: '',
     expiryDate: '',
     unit: '',
-    quantity: 1,
+    quantity: 1 as number | '',
     supplierName: '',
-    poNumber: '',
   });
 
   // Form Koreksi Stok Rusak
@@ -98,14 +97,15 @@ export default function WarehousePage() {
       return;
     }
 
-    if (!receivingForm.batchNumber || !receivingForm.expiryDate || receivingForm.quantity <= 0) {
+    const qty = Number(receivingForm.quantity);
+    if (!receivingForm.batchNumber || !receivingForm.expiryDate || !(qty > 0)) {
       showNotification('error', 'Nomor batch, tanggal kedaluwarsa, dan kuantitas wajib diisi.');
       return;
     }
 
-    const baseQtyToAdd = toBaseUnit(receivingForm.quantity, receivingForm.unit, med);
+    const baseQtyToAdd = toBaseUnit(qty, receivingForm.unit, med);
     const batchId = 'bat-' + generateId();
-    const po = receivingForm.poNumber || `PO-${Date.now().toString().slice(-6)}`;
+    const po = `PO-${Date.now().toString().slice(-6)}`;
 
     // 1. Simpan Batch Baru
     const newBatch: StockBatch = {
@@ -127,7 +127,7 @@ export default function WarehousePage() {
       batchId: batchId,
       mutationType: MutationType.BARANG_DATANG,
       qtyChange: baseQtyToAdd,
-      unitUsed: `${receivingForm.quantity} ${receivingForm.unit}`,
+      unitUsed: `${qty} ${receivingForm.unit}`,
       referenceNumber: po,
       notes: `Penerimaan dari ${newBatch.supplierName} (Batch: ${newBatch.batchNumber})`,
       createdAt: new Date().toISOString(),
@@ -135,7 +135,7 @@ export default function WarehousePage() {
 
     showNotification(
       'success',
-      `Berhasil menerima ${receivingForm.quantity} ${receivingForm.unit} (${baseQtyToAdd} ${med.baseUnit}) ${med.name}.`
+      `Berhasil menerima ${qty} ${receivingForm.unit} (${baseQtyToAdd} ${med.baseUnit}) ${med.name}.`
     );
 
     // Reset Form
@@ -144,7 +144,6 @@ export default function WarehousePage() {
       batchNumber: '',
       expiryDate: '',
       quantity: 1,
-      poNumber: '',
     }));
     refreshData();
   };
@@ -196,6 +195,7 @@ export default function WarehousePage() {
   };
 
   const selectedMed = medicines.find((m) => m.id === receivingForm.medicineId);
+  const receivingQty = Number(receivingForm.quantity) || 0;
   const availableUnits = selectedMed ? getAvailableUnits(selectedMed) : [];
 
   return (
@@ -294,16 +294,16 @@ export default function WarehousePage() {
                     min="1"
                     className="form-input"
                     value={receivingForm.quantity}
-                    onChange={(e) => setReceivingForm({ ...receivingForm, quantity: parseInt(e.target.value) || 1 })}
+                    onChange={(e) => setReceivingForm({ ...receivingForm, quantity: e.target.value === '' ? '' : parseInt(e.target.value, 10) })}
                     required
                   />
                 </div>
               </div>
 
-              {selectedMed && (
+              {selectedMed && receivingQty > 0 && (
                 <div className="badge badge-info" style={{ marginBottom: 'var(--sp-4)', alignSelf: 'flex-start' }}>
                   Akan ditambahkan ke stok fisik: +
-                  {toBaseUnit(receivingForm.quantity, receivingForm.unit, selectedMed)} {selectedMed.baseUnit}
+                  {toBaseUnit(receivingQty, receivingForm.unit, selectedMed)} {selectedMed.baseUnit}
                 </div>
               )}
 
@@ -340,16 +340,6 @@ export default function WarehousePage() {
                     placeholder="Contoh: PT Kimia Farma Trading"
                     value={receivingForm.supplierName}
                     onChange={(e) => setReceivingForm({ ...receivingForm, supplierName: e.target.value })}
-                  />
-                </div>
-                <div className="form-group">
-                  <label className="form-label">No Surat Jalan / PO</label>
-                  <input
-                    type="text"
-                    className="form-input"
-                    placeholder="PO-2026-001"
-                    value={receivingForm.poNumber}
-                    onChange={(e) => setReceivingForm({ ...receivingForm, poNumber: e.target.value })}
                   />
                 </div>
               </div>
