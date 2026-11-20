@@ -27,6 +27,7 @@ import {
   cloudDeleteMedicine,
   cloudFetchBatches,
   cloudUpsertBatch,
+  cloudDeleteBatches,
   cloudFetchMutations,
   cloudAddMutation,
   cloudFetchSales,
@@ -231,6 +232,19 @@ export function updateBatch(id: string, updates: Partial<StockBatch>): void {
 
   if (isSupabaseReady()) {
     cloudUpsertBatch(all[idx]);
+  }
+}
+
+export function deleteBatchesByMedicine(medicineId: string): void {
+  const all = getBatches();
+  const targetIds = all.filter((b) => b.medicineId === medicineId).map((b) => b.id);
+  setStore(
+    KEYS.batches,
+    all.filter((b) => b.medicineId !== medicineId)
+  );
+
+  if (isSupabaseReady() && targetIds.length > 0) {
+    cloudDeleteBatches(targetIds);
   }
 }
 

@@ -9,6 +9,7 @@ import {
   addBatch,
   addMutation,
   reduceStock,
+  deleteBatchesByMedicine,
   initDB,
 } from '@/database/db';
 import {
@@ -145,6 +146,18 @@ export default function WarehousePage() {
       expiryDate: '',
       quantity: 1,
     }));
+    refreshData();
+  };
+
+  // Hapus semua batch obat terpilih (cache lokal + tabel stock_batches di cloud)
+  const handleDeleteAllBatches = () => {
+    const med = medicines.find((m) => m.id === receivingForm.medicineId);
+    if (!med) return;
+    const count = batches.filter((b) => b.medicineId === med.id).length;
+    if (count === 0) return;
+    if (!confirm(`Hapus ${count} batch stok ${med.name}? Stok obat ini akan menjadi 0.`)) return;
+    deleteBatchesByMedicine(med.id);
+    showNotification('success', `${count} batch ${med.name} berhasil dihapus.`);
     refreshData();
   };
 
@@ -352,9 +365,14 @@ export default function WarehousePage() {
 
           {/* List Batch Aktif Obat Terpilih */}
           <div className="card">
-            <h3 style={{ marginBottom: 'var(--sp-3)' }}>
-              Batch Stok Aktif: {selectedMed?.name || 'Obat Terpilih'}
-            </h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 'var(--sp-3)', marginBottom: 'var(--sp-3)' }}>
+              <h3>Batch Stok Aktif: {selectedMed?.name || 'Obat Terpilih'}</h3>
+              {batches.some((b) => b.medicineId === receivingForm.medicineId) && (
+                <button type="button" className="btn btn-danger btn-sm" onClick={handleDeleteAllBatches}>
+                  Hapus Semua Batch
+                </button>
+              )}
+            </div>
             {batches.filter((b) => b.medicineId === receivingForm.medicineId).length === 0 ? (
               <div className="empty-state" style={{ padding: 'var(--sp-8)' }}>
                 <p>Belum ada batch stok untuk obat ini.</p>

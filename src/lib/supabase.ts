@@ -235,6 +235,20 @@ export async function cloudUpsertBatch(batch: StockBatch): Promise<boolean> {
   }
 }
 
+export async function cloudDeleteBatches(ids: string[]): Promise<boolean> {
+  const sb = getSupabase();
+  if (!sb) return false;
+
+  try {
+    const { error } = await sb.from('stock_batches').delete().in('id', ids);
+    if (error) throw error;
+    return true;
+  } catch (err) {
+    console.error('cloudDeleteBatches error:', err);
+    return false;
+  }
+}
+
 // ------------------------------------------------------------
 // Cloud CRUD Functions for Mutations
 // ------------------------------------------------------------
