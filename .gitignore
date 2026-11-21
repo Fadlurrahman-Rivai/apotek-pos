@@ -43,6 +43,10 @@ next-env.d.ts
 # agents skills
 /.agents
 
+# editor & MCP tooling
+/.zed
+/.playwright-mcp
+
 # cloudflare / opennext
 .open-next
 .dev.vars

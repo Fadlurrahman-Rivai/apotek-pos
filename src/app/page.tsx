@@ -44,14 +44,18 @@ export default function DashboardPage() {
   const totalRevenueToday = todaySales.reduce((acc, sale) => acc + sale.totalAmount, 0);
 
   // Status Kedaluwarsa Batch
-  const expiredBatches = batches.filter(
+  // Hanya batch yang masih punya stok dan belum diretur yang perlu diwaspadai
+  const activeBatches = batches.filter(
+    (b) => b.totalBaseQty > 0 && b.status !== BatchStatus.RETURNED
+  );
+  const expiredBatches = activeBatches.filter(
     (b) => b.status === BatchStatus.EXPIRED || daysUntilExpiry(b.expiryDate) <= 0
   );
-  const criticalBatches = batches.filter((b) => {
+  const criticalBatches = activeBatches.filter((b) => {
     const d = daysUntilExpiry(b.expiryDate);
     return b.status !== BatchStatus.EXPIRED && d > 0 && d <= 30;
   });
-  const warningBatches = batches.filter((b) => {
+  const warningBatches = activeBatches.filter((b) => {
     const d = daysUntilExpiry(b.expiryDate);
     return b.status !== BatchStatus.EXPIRED && d > 30 && d <= 90;
   });

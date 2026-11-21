@@ -515,6 +515,30 @@ export default function PricingPage() {
                     />
                   </div>
                 )}
+
+                {(editingMedicine.secondaryUnit || editingMedicine.tertiaryUnit) && (() => {
+                  const pieces =
+                    (editingMedicine.piecesPerSecondary ?? 1) * (editingMedicine.secondaryPerTertiary ?? 1);
+                  const autoPrice = Math.round(editPrices.sellPrice / pieces);
+                  return (
+                    <div className="form-group">
+                      <label className="form-label">Harga Jual per {editingMedicine.baseUnit} (Rp)</label>
+                      <input
+                        type="number"
+                        className="form-input"
+                        value={editPrices.sellPriceBase || ''}
+                        placeholder={`Otomatis: ${formatRupiah(autoPrice)}`}
+                        onChange={(e) =>
+                          setEditPrices({ ...editPrices, sellPriceBase: parseFloat(e.target.value) || 0 })
+                        }
+                      />
+                      <div className="text-xs text-muted" style={{ marginTop: '4px' }}>
+                        Kosongkan agar dihitung otomatis dari harga {editingMedicine.tertiaryUnit || 'satuan utama'} ({pieces}{' '}
+                        {editingMedicine.baseUnit}).
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" onClick={() => setEditingMedicine(null)}>

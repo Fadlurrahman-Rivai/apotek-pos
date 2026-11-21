@@ -139,6 +139,8 @@ export default function PosPage() {
   } | null>(null);
   const [showReceipt, setShowReceipt] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  // Teks sementara kolom jumlah, agar kolom bisa dikosongkan saat mengetik tanpa menghapus baris
+  const [qtyDrafts, setQtyDrafts] = useState<Record<string, string>>({});
 
   useEffect(() => {
     initDB();
@@ -164,6 +166,16 @@ export default function PosPage() {
     return matchesSearch && matchesCategory;
   });
 
+  // Total qty (satuan dasar) satu obat di keranjang, semua satuan digabung; `skipIndex` dikecualikan
+  const cartBaseQtyOf = (medicineId: string, skipIndex = -1) =>
+    cart.reduce(
+      (sum, item, i) =>
+        i !== skipIndex && item.medicine.id === medicineId
+          ? sum + toBaseUnit(item.quantity, item.unit, item.medicine)
+          : sum,
+      0
+    );
+
   // Tambah ke keranjang
   const handleAddToCart = (medicine: Medicine, unit: string) => {
     const stock = getTotalStock(medicine.id);
@@ -177,9 +189,11 @@ export default function PosPage() {
     const price = getPriceForUnit(medicine, unit);
     const baseQtyNeeded = toBaseUnit(1, unit, medicine);
 
-    // Cek apakah batch cukup
-    if (bestBatch.totalBaseQty < baseQtyNeeded) {
-      showNotification('error', `Sisa batch ${bestBatch.batchNumber} tidak mencukupi untuk 1 ${unit}.`);
+    // Stok dihitung dari total semua batch (FEFO bisa mengambil dari beberapa batch),
+    // termasuk yang sudah ada di keranjang dalam satuan lain.
+    if (cartBaseQtyOf(medicine.id) + baseQtyNeeded > stock + 1e-9) {
+      const baseUnitDisplay = medicine.baseUnit.toLowerCase() === 'tablet' ? 'Biji' : medicine.baseUnit;
+      showNotification('error', `Jumlah melebihi total stok fisik yang tersedia (${stock} ${baseUnitDisplay}).`);
       return;
     }
 
@@ -188,19 +202,12 @@ export default function PosPage() {
     );
 
     if (existingIndex > -1) {
-      const updated = [...cart];
-      const newQty = updated[existingIndex].quantity + 1;
-      const totalBaseQtyNeeded = toBaseUnit(newQty, unit, medicine);
-
-      const baseUnitDisplay = medicine.baseUnit.toLowerCase() === 'tablet' ? 'Biji' : medicine.baseUnit;
-      if (totalBaseQtyNeeded > stock) {
-        showNotification('error', `Jumlah melebihi total stok fisik yang tersedia (${stock} ${baseUnitDisplay}).`);
-        return;
-      }
-
-      updated[existingIndex].quantity = newQty;
-      updated[existingIndex].subtotal = newQty * updated[existingIndex].unitPrice;
-      setCart(updated);
+      const newQty = cart[existingIndex].quantity + 1;
+      setCart(
+        cart.map((item, i) =>
+          i === existingIndex ? { ...item, quantity: newQty, subtotal: newQty * item.unitPrice } : item
+        )
+      );
     } else {
       const newItem: CartItem = {
         id: generateId(),
@@ -218,10 +225,12 @@ export default function PosPage() {
   };
 
   // Update kuantitas item keranjang
-  const handleUpdateQuantity = (index: number, newQty: number) => {
+  // Mengembalikan true bila jumlah diterima (atau baris dihapus)
+  const handleUpdateQuantity = (index: number, newQty: number): boolean => {
+    if (!Number.isFinite(newQty)) return false;
     if (newQty <= 0) {
       handleRemoveItem(index);
-      return;
+      return true;
     }
 
     const item = cart[index];
@@ -229,16 +238,34 @@ export default function PosPage() {
     const baseQtyNeeded = toBaseUnit(newQty, item.unit, item.medicine);
     const baseUnitDisplay = item.medicine.baseUnit.toLowerCase() === 'tablet' ? 'Biji' : item.medicine.baseUnit;
 
-    if (baseQtyNeeded > totalStock) {
-      showNotification('error', `Stok tidak mencukupi. Maksimal ${totalStock} ${baseUnitDisplay}.`);
-      return;
+    // Gabungkan dengan baris lain obat yang sama (satuan berbeda)
+    if (cartBaseQtyOf(item.medicine.id, index) + baseQtyNeeded > totalStock + 1e-9) {
+      showNotification('error', `Stok tidak mencukupi. Total stok ${totalStock} ${baseUnitDisplay}.`);
+      return false;
     }
 
-    const updated = [...cart];
-    updated[index].quantity = newQty;
-    updated[index].subtotal = newQty * updated[index].unitPrice;
-    setCart(updated);
+    setCart(cart.map((c, i) => (i === index ? { ...c, quantity: newQty, subtotal: newQty * c.unitPrice } : c)));
+    return true;
   };
+
+  const handleQtyInputChange = (index: number, itemId: string, raw: string) => {
+    setQtyDrafts((prev) => ({ ...prev, [itemId]: raw }));
+    const parsed = parseFloat(raw);
+    // Kolom kosong / belum valid: tunggu pengguna selesai mengetik, jangan hapus baris
+    if (!(parsed > 0)) return;
+    if (!handleUpdateQuantity(index, parsed)) {
+      setQtyDrafts((prev) => {
+        const { [itemId]: _drop, ...rest } = prev;
+        return rest;
+      });
+    }
+  };
+
+  const clearQtyDraft = (itemId: string) =>
+    setQtyDrafts((prev) => {
+      const { [itemId]: _drop, ...rest } = prev;
+      return rest;
+    });
 
   // Hapus item dari keranjang
   const handleRemoveItem = (index: number) => {
@@ -484,8 +511,9 @@ export default function PosPage() {
                         type="number"
                         min="0.1"
                         step="any"
-                        value={item.quantity}
-                        onChange={(e) => handleUpdateQuantity(idx, parseFloat(e.target.value) || 0)}
+                        value={qtyDrafts[item.id] ?? item.quantity}
+                        onChange={(e) => handleQtyInputChange(idx, item.id, e.target.value)}
+                        onBlur={() => clearQtyDraft(item.id)}
                         style={{
                           width: '50px',
                           textAlign: 'center',

@@ -69,21 +69,24 @@ export default function ExpiryPage() {
   };
 
   // Kalkulasi metrik
-  const expiredCount = batches.filter(
+  // Batch tanpa stok (sudah habis terjual) tidak dihitung sebagai peringatan
+  const stockedBatches = batches.filter((b) => b.totalBaseQty > 0);
+
+  const expiredCount = stockedBatches.filter(
     (b) => b.status === BatchStatus.EXPIRED || (b.status === BatchStatus.ACTIVE && daysUntilExpiry(b.expiryDate) <= 0)
   ).length;
 
-  const criticalCount = batches.filter((b) => {
+  const criticalCount = stockedBatches.filter((b) => {
     const d = daysUntilExpiry(b.expiryDate);
     return b.status === BatchStatus.ACTIVE && d > 0 && d <= 30;
   }).length;
 
-  const warningCount = batches.filter((b) => {
+  const warningCount = stockedBatches.filter((b) => {
     const d = daysUntilExpiry(b.expiryDate);
     return b.status === BatchStatus.ACTIVE && d > 30 && d <= 90;
   }).length;
 
-  const safeCount = batches.filter((b) => {
+  const safeCount = stockedBatches.filter((b) => {
     const d = daysUntilExpiry(b.expiryDate);
     return b.status === BatchStatus.ACTIVE && d > 90;
   }).length;
@@ -93,7 +96,8 @@ export default function ExpiryPage() {
     const days = daysUntilExpiry(b.expiryDate);
     const status = getExpiryStatus(b.expiryDate);
 
-    if (filter === 'EXPIRED') return b.status === BatchStatus.EXPIRED || days <= 0;
+    if (filter !== 'ALL' && b.totalBaseQty <= 0) return false;
+    if (filter === 'EXPIRED') return b.status !== BatchStatus.RETURNED && (b.status === BatchStatus.EXPIRED || days <= 0);
     if (filter === 'CRITICAL') return b.status === BatchStatus.ACTIVE && status === 'CRITICAL';
     if (filter === 'WARNING') return b.status === BatchStatus.ACTIVE && status === 'WARNING';
     if (filter === 'SAFE') return b.status === BatchStatus.ACTIVE && status === 'SAFE';

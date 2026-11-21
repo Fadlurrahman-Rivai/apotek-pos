@@ -20,7 +20,7 @@ import {
   seedSales,
   seedSaleItems,
 } from './seed';
-import { daysUntilExpiry, generateId } from '@/lib/formatters';
+import { daysUntilExpiry, formatDateInput, generateId, today } from '@/lib/formatters';
 import {
   cloudFetchMedicines,
   cloudFetchBatches,
@@ -335,8 +335,9 @@ export function getSales(): Sale[] {
 }
 
 export function getTodaySales(): Sale[] {
-  const todayStr = new Date().toISOString().split('T')[0];
-  return getSales().filter((s) => s.createdAt.startsWith(todayStr));
+  // Tanggal lokal perangkat, bukan UTC, agar transaksi dini hari tidak masuk ke hari kemarin
+  const todayStr = today();
+  return getSales().filter((s) => formatDateInput(s.createdAt) === todayStr);
 }
 
 // ── Sale Items ──

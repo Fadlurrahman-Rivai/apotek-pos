@@ -10,7 +10,7 @@ import {
   deletePrescriptionRecord,
 } from '@/database/db';
 import { PrescriptionRecord, PrescriptionRecordItem } from '@/database/schema';
-import { formatDate, formatRupiah, generateId } from '@/lib/formatters';
+import { formatDate, formatDateInput, formatRupiah, generateId, today } from '@/lib/formatters';
 
 export default function RiwayatResepPage() {
   const [records, setRecords] = useState<PrescriptionRecord[]>([]);
@@ -118,9 +118,8 @@ export default function RiwayatResepPage() {
       if (dateFilter !== 'ALL' && rec.date) {
         const itemDate = new Date(rec.date);
         if (dateFilter === 'TODAY') {
-          const todayStr = now.toISOString().split('T')[0];
-          const itemStr = itemDate.toISOString().split('T')[0];
-          if (itemStr !== todayStr) return false;
+          // Bandingkan tanggal lokal (bukan UTC) agar tidak bergeser di zona waktu Indonesia
+          if (formatDateInput(rec.date) !== today()) return false;
         } else if (dateFilter === 'WEEK') {
           const sevenDaysAgo = new Date();
           sevenDaysAgo.setDate(now.getDate() - 7);
